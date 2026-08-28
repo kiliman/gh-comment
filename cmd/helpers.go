@@ -37,7 +37,13 @@ var (
 	// HTML/Script tag detection patterns
 	htmlTagPattern       = regexp.MustCompile(`(?i)<\s*\/?\s*(script|iframe|object|embed|form|input|meta|link)\b[^>]*>`)
 	scriptPattern        = regexp.MustCompile(`(?i)javascript\s*:|<\s*script\b`)
-	dangerousAttrPattern = regexp.MustCompile(`(?i)\b(on\w+|javascript|vbscript|data|mocha|livescript)\s*=`)
+	dangerousAttrPattern = regexp.MustCompile(`(?i)\b(on\w+|javascript|vbscript|mocha|livescript)\s*=`)
+
+	// Markdown code, stripped before the scan above runs. Go's RE2 has no
+	// backreferences, so the fence alternatives are spelled out rather than matched
+	// to their opener.
+	fencedCodePattern = regexp.MustCompile("(?ms)^[ \\t]*(?:`{3,}|~{3,})[^\\n]*\\n.*?^[ \\t]*(?:`{3,}|~{3,})[ \\t]*$")
+	inlineCodePattern = regexp.MustCompile("`+[^`\\n]*`+")
 
 	// Repository validation patterns
 	validRepoPattern  = regexp.MustCompile(`^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`)
@@ -188,8 +194,18 @@ func validateCommentBody(body string) error {
 	return nil
 }
 
+// stripMarkdownCode removes fenced blocks and inline spans so the security scan
+// reads prose only. Quoting source is what a review comment is for, and the body
+// leaves here as a JSON API payload — GitHub's own renderer sanitizes it, nothing
+// executes it on this side.
+func stripMarkdownCode(body string) string {
+	return inlineCodePattern.ReplaceAllString(fencedCodePattern.ReplaceAllString(body, ""), "")
+}
+
 // validateCommentSecurity checks for potentially malicious content in comments
 func validateCommentSecurity(body string) error {
+	body = stripMarkdownCode(body)
+
 	// Check for dangerous HTML tags
 	if htmlTagPattern.MatchString(body) {
 		return formatSecurityValidationError("comment body", "dangerous HTML tags detected",
@@ -205,7 +221,7 @@ func validateCommentSecurity(body string) error {
 	// Check for dangerous attributes
 	if dangerousAttrPattern.MatchString(body) {
 		return formatSecurityValidationError("comment body", "dangerous attributes detected",
-			"Event handlers and script attributes like onclick, onload, href='javascript:' are not allowed")
+			"Event handlers and script attributes like onclick, onload, href='javascript:' are not allowed outside code blocks — wrap quoted source in backticks")
 	}
 
 	return nil

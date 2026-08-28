@@ -526,3 +526,45 @@ func TestValidateMultipleFields(t *testing.T) {
 		})
 	}
 }
+
+// A code review comment's whole job is quoting source. These are the shapes that
+// used to be refused outright: event props, a `data` assignment, and form markup.
+func TestValidateCommentBodyAllowsQuotedCode(t *testing.T) {
+	allowed := []struct {
+		name string
+		body string
+	}{
+		{"inline event prop", "The `onClose={() => setOpen(false)}` handler never fires."},
+		{"fenced jsx", "Consider:\n\n```tsx\n<WebDnsRecordsSlideOver\n  onClose={() => setOpen(false)}\n/>\n```\n\nThat drops the prop."},
+		{"tilde fence", "~~~js\nel.onclick = handler\n~~~"},
+		{"data assignment in prose", "This shadows the outer scope: const data = await res.json()"},
+		{"fenced form markup", "```html\n<form><input type='password'></form>\n```"},
+	}
+
+	for _, tt := range allowed {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateCommentBody(tt.body); err != nil {
+				t.Errorf("validateCommentBody() rejected quoted code: %v", err)
+			}
+		})
+	}
+
+	// Stripping code must not become a bypass: raw HTML outside a fence is still
+	// refused, and a fence that is never closed strips nothing.
+	refused := []struct {
+		name string
+		body string
+	}{
+		{"handler outside code", "Click <button onclick='doEvil()'>here</button>"},
+		{"unterminated fence", "```\n<script>alert('xss')</script>"},
+		{"prose after a closed fence", "```js\nok()\n```\nand then <script>alert('xss')</script>"},
+	}
+
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateCommentBody(tt.body); err == nil {
+				t.Error("validateCommentBody() accepted raw HTML outside code")
+			}
+		})
+	}
+}
