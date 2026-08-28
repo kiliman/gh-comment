@@ -148,6 +148,31 @@ func TestLinesCommandVerbose(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestLinesCommandShowCodeUsesRealFileContent(t *testing.T) {
+	originalClient := linesClient
+	originalRepo := repo
+	originalShowCode := showCodeContext
+	defer func() {
+		linesClient = originalClient
+		repo = originalRepo
+		showCodeContext = originalShowCode
+	}()
+
+	mockClient := github.NewMockClient()
+	linesClient = mockClient
+	repo = "owner/repo"
+	showCodeContext = true
+
+	output := captureOutput(func() {
+		err := runLines(nil, []string{"123", "test.go"})
+		assert.NoError(t, err)
+	})
+
+	assert.Contains(t, output, "42: println(\"hello\")")
+	assert.Contains(t, output, "43: }")
+	assert.NotContains(t, output, "[code content would be shown here]")
+}
+
 func TestLinesCommandWithClientInitialization(t *testing.T) {
 	// Save original state
 	originalClient := linesClient

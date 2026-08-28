@@ -1,6 +1,8 @@
 package github
 
 import (
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -23,6 +25,7 @@ type GitHubAPI interface {
 	// PR operations
 	FetchPRDiff(owner, repo string, pr int) (*PullRequestDiff, error)
 	GetPRDetails(owner, repo string, pr int) (map[string]interface{}, error)
+	FetchFileContent(owner, repo, path, ref string) (string, error)
 
 	// Review operations
 	CreateReview(owner, repo string, pr int, review ReviewInput) error
@@ -242,6 +245,16 @@ func (m *MockClient) GetPRDetails(owner, repo string, pr int) (map[string]interf
 			"sha": "abc123def456",
 		},
 	}, nil
+}
+
+func (m *MockClient) FetchFileContent(owner, repo, path, ref string) (string, error) {
+	lines := make([]string, 43)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("// line %d", i+1)
+	}
+	lines[41] = "println(\"hello\")"
+	lines[42] = "}"
+	return strings.Join(lines, "\n"), nil
 }
 
 func (m *MockClient) CreateReview(owner, repo string, pr int, review ReviewInput) error {

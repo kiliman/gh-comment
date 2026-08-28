@@ -2,10 +2,10 @@ package github
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"strconv"
 	"strings"
 
@@ -15,6 +15,7 @@ import (
 // RealClient implements GitHubAPI using actual GitHub API calls
 type RealClient struct {
 	restClient    *api.RESTClient
+	diffClient    *api.RESTClient
 	graphqlClient *api.GraphQLClient
 }
 
@@ -25,6 +26,15 @@ func NewRealClient() (*RealClient, error) {
 		return nil, fmt.Errorf("failed to create REST client: %w", err)
 	}
 
+	diffClient, err := api.NewRESTClient(api.ClientOptions{
+		Headers: map[string]string{
+			"Accept": "application/vnd.github.v3.diff",
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create diff REST client: %w", err)
+	}
+
 	graphqlClient, err := api.DefaultGraphQLClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GraphQL client: %w", err)
@@ -32,6 +42,7 @@ func NewRealClient() (*RealClient, error) {
 
 	return &RealClient{
 		restClient:    restClient,
+		diffClient:    diffClient,
 		graphqlClient: graphqlClient,
 	}, nil
 }
@@ -494,29 +505,27 @@ func (c *RealClient) FetchPRDiff(owner, repo string, pr int) (*PullRequestDiff, 
 	}
 	defer resp.Body.Close()
 
-	// Parse the diff URL from the response
-	var prData struct {
-		DiffURL string `json:"diff_url"`
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
 		return nil, fmt.Errorf("failed to read PR response: %w", err)
 	}
 
-	err = json.Unmarshal(body, &prData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse PR data: %w", err)
+	diffClient := c.diffClient
+	if diffClient == nil {
+		diffClient, err = api.NewRESTClient(api.ClientOptions{
+			Headers: map[string]string{
+				"Accept": "application/vnd.github.v3.diff",
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create diff REST client: %w", err)
+		}
 	}
 
-	if prData.DiffURL == "" {
-		return nil, fmt.Errorf("PR #%d does not have a diff URL (may be empty or merged)", pr)
-	}
-
-	// Fetch the actual diff
-	diffResp, err := http.Get(prData.DiffURL)
+	// Fetch the diff directly from the API endpoint with an explicit diff Accept header.
+	// The HTML diff_url points at github.com and can still 404 even with API auth.
+	diffResp, err := diffClient.Request("GET", endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch diff from GitHub: %w", err)
+		return nil, c.wrapAPIError(err, "fetch diff for PR #%d from %s/%s", pr, owner, repo)
 	}
 	defer diffResp.Body.Close()
 
@@ -722,6 +731,45 @@ func (c *RealClient) GetPRDetails(owner, repo string, pr int) (map[string]interf
 	}
 
 	return result, nil
+}
+
+// FetchFileContent fetches a repository file at a specific ref.
+func (c *RealClient) FetchFileContent(owner, repo, path, ref string) (string, error) {
+	if err := validateRepoParams(owner, repo); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("file path cannot be empty")
+	}
+	if strings.TrimSpace(ref) == "" {
+		return "", fmt.Errorf("git ref cannot be empty")
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/%s/contents/%s?ref=%s", owner, repo, path, ref)
+
+	var result struct {
+		Type     string `json:"type"`
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+	}
+	err := c.restClient.Get(endpoint, &result)
+	if err != nil {
+		return "", c.wrapAPIError(err, "fetch file contents for %s at %s in %s/%s", path, ref, owner, repo)
+	}
+
+	if result.Type != "file" {
+		return "", fmt.Errorf("%s at %s is not a regular file", path, ref)
+	}
+	if result.Encoding != "base64" {
+		return "", fmt.Errorf("unsupported file encoding %q for %s", result.Encoding, path)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(result.Content, "\n", ""))
+	if err != nil {
+		return "", fmt.Errorf("failed to decode file contents for %s: %w", path, err)
+	}
+
+	return string(decoded), nil
 }
 
 // FindPendingReview finds a pending review for the current user on a PR

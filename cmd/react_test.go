@@ -308,6 +308,10 @@ func (m *ReactMockClient) GetPRDetails(owner, repo string, pr int) (map[string]i
 	return map[string]interface{}{}, nil
 }
 
+func (m *ReactMockClient) FetchFileContent(owner, repo, path, ref string) (string, error) {
+	return "", nil
+}
+
 func (m *ReactMockClient) FindPendingReview(owner, repo string, pr int) (int, error) {
 	return 0, nil
 }

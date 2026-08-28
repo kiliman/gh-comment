@@ -2,6 +2,7 @@ package github
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -222,6 +223,36 @@ func (c *TestClient) GetPRDetails(owner, repo string, pr int) (map[string]interf
 	}
 
 	return result, nil
+}
+
+func (c *TestClient) FetchFileContent(owner, repo, path, ref string) (string, error) {
+	endpoint := fmt.Sprintf("repos/%s/%s/contents/%s?ref=%s", owner, repo, path, ref)
+
+	resp, err := c.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("API request failed with status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Type     string `json:"type"`
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(result.Content, "\n", ""))
+	if err != nil {
+		return "", fmt.Errorf("failed to decode file contents: %w", err)
+	}
+
+	return string(decoded), nil
 }
 
 // Stub implementations for methods not needed in tests

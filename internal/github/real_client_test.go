@@ -2,8 +2,12 @@ package github
 
 import (
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -451,4 +455,69 @@ index 7654321..gfedcba 100644
 			}
 		})
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestFetchPRDiffUsesAPIEndpointWithDiffAcceptHeader(t *testing.T) {
+	restTransport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		assert.Equal(t, "token test-token", req.Header.Get("Authorization"))
+		assert.Equal(t, "https://api.github.com/repos/owner/repo/pulls/123", req.URL.String())
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"number":123}`)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+		}, nil
+	})
+
+	diffTransport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		assert.Equal(t, "token test-token", req.Header.Get("Authorization"))
+		assert.Equal(t, "application/vnd.github.v3.diff", req.Header.Get("Accept"))
+		assert.Equal(t, "https://api.github.com/repos/owner/repo/pulls/123", req.URL.String())
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body: io.NopCloser(strings.NewReader(`diff --git a/test.go b/test.go
+index 1234567..abcdefg 100644
+--- a/test.go
++++ b/test.go
+@@ -1,2 +1,3 @@
+ func main() {
++    println("hello")
+ }`)),
+			Header: http.Header{"Content-Type": []string{"text/plain"}},
+		}, nil
+	})
+
+	restClient, err := api.NewRESTClient(api.ClientOptions{
+		AuthToken: "test-token",
+		Host:      "github.com",
+		Transport: restTransport,
+	})
+	assert.NoError(t, err)
+
+	diffClient, err := api.NewRESTClient(api.ClientOptions{
+		AuthToken: "test-token",
+		Host:      "github.com",
+		Headers: map[string]string{
+			"Accept": "application/vnd.github.v3.diff",
+		},
+		Transport: diffTransport,
+	})
+	assert.NoError(t, err)
+
+	client := &RealClient{restClient: restClient, diffClient: diffClient}
+	diff, err := client.FetchPRDiff("owner", "repo", 123)
+	assert.NoError(t, err)
+	assert.NotNil(t, diff)
+	assert.Len(t, diff.Files, 1)
+	assert.Equal(t, "test.go", diff.Files[0].Filename)
+	assert.True(t, diff.Files[0].Lines[1])
+	assert.True(t, diff.Files[0].Lines[2])
+	assert.True(t, diff.Files[0].Lines[3])
 }

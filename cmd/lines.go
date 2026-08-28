@@ -52,7 +52,7 @@ var linesCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(linesCmd)
-	linesCmd.Flags().BoolVar(&showCodeContext, "show-code", false, "Show actual code content for each line")
+	linesCmd.Flags().BoolVar(&showCodeContext, "show-code", true, "Show actual code content for each line")
 }
 
 func runLines(cmd *cobra.Command, args []string) error {
@@ -142,6 +142,14 @@ func runLines(cmd *cobra.Command, args []string) error {
 	// Group consecutive lines for better display
 	ranges := groupConsecutiveLines(lineNumbers)
 
+	var fileLines []string
+	if showCodeContext {
+		fileLines, err = fetchPRFileLines(linesClient, owner, repoName, pr, filePath)
+		if err != nil {
+			return fmt.Errorf("failed to fetch file contents for %s: %w", filePath, err)
+		}
+	}
+
 	fmt.Printf("📍 Line ranges available for comments:\n")
 	for _, lineRange := range ranges {
 		if lineRange.start == lineRange.end {
@@ -154,9 +162,7 @@ func runLines(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\n📝 Individual lines:\n")
 	for _, lineNum := range lineNumbers {
 		if showCodeContext {
-			// In a real implementation, you'd fetch the actual file content
-			// For now, just show the line numbers
-			fmt.Printf("%d: [code content would be shown here]\n", lineNum)
+			fmt.Printf("%d: %s\n", lineNum, lineContentAt(fileLines, lineNum))
 		} else {
 			fmt.Printf("%d\n", lineNum)
 		}
@@ -169,4 +175,35 @@ func runLines(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func fetchPRFileLines(client github.GitHubAPI, owner, repoName string, pr int, filePath string) ([]string, error) {
+	prDetails, err := client.GetPRDetails(owner, repoName, pr)
+	if err != nil {
+		return nil, err
+	}
+
+	head, ok := prDetails["head"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("PR #%d is missing head commit details", pr)
+	}
+
+	sha, ok := head["sha"].(string)
+	if !ok || strings.TrimSpace(sha) == "" {
+		return nil, fmt.Errorf("PR #%d is missing head SHA", pr)
+	}
+
+	content, err := client.FetchFileContent(owner, repoName, filePath, sha)
+	if err != nil {
+		return nil, err
+	}
+
+	return strings.Split(content, "\n"), nil
+}
+
+func lineContentAt(lines []string, lineNum int) string {
+	if lineNum <= 0 || lineNum > len(lines) {
+		return "[line content unavailable]"
+	}
+	return lines[lineNum-1]
 }

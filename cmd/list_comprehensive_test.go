@@ -371,6 +371,10 @@ func (m *MockGitHubClientForList) GetPRDetails(owner, repo string, pr int) (map[
 	return nil, nil
 }
 
+func (m *MockGitHubClientForList) FetchFileContent(owner, repo, path, ref string) (string, error) {
+	return "", nil
+}
+
 func (m *MockGitHubClientForList) FindPendingReview(owner, repo string, pr int) (int, error) {
 	return 0, nil
 }
