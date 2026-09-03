@@ -149,20 +149,9 @@ func (c *RealClient) CreateReviewCommentReply(owner, repo string, commentID int,
 		return nil, enhancedErr
 	}
 
-	// Extract PR number from pull_request_url
-	if originalComment.PullRequestURL == "" {
-		return nil, fmt.Errorf("comment #%d has no associated pull request", commentID)
-	}
-
-	// Parse PR number from URL like "https://api.github.com/repos/owner/repo/pulls/422"
-	parts := strings.Split(originalComment.PullRequestURL, "/")
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("invalid pull_request_url format")
-	}
-	prNumberStr := parts[len(parts)-1]
-	prNumber, err := strconv.Atoi(prNumberStr)
+	prNumber, err := prNumberFromParentURL(originalComment.PullRequestURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse PR number from URL: %w", err)
+		return nil, fmt.Errorf("comment #%d has no usable pull request reference: %w", commentID, err)
 	}
 
 	// Use the correct GitHub API endpoint for review comment replies
@@ -190,7 +179,77 @@ func (c *RealClient) CreateReviewCommentReply(owner, repo string, commentID int,
 	return &comment, nil
 }
 
-// FindReviewThreadForComment finds the thread ID for a review comment
+// GetPRNumberForComment resolves which pull request a comment belongs to,
+// using only the comment ID.
+//
+// Both comment namespaces hand back their parent on a plain GET: a review
+// comment carries pull_request_url, an issue comment carries issue_url. An
+// issue comment's issue number is the PR number when the issue is a PR, so the
+// trailing path segment answers the question either way — one API call, no
+// branch, no flag.
+//
+// The honest contract is "the comment's parent issue-or-PR number", which is
+// wider than the name suggests: a comment on a plain issue resolves to that
+// issue's number. That is deliberate and safe. GitHub numbers issues and pull
+// requests in one shared sequence per repository, so the number returned is
+// always the comment's own parent and never some other PR. Rejecting it and
+// falling back to branch detection would substitute a number with no relation
+// to the comment at all, which is the failure this lookup exists to prevent.
+func (c *RealClient) GetPRNumberForComment(owner, repo string, commentID int) (int, error) {
+	if err := validateRepoParams(owner, repo); err != nil {
+		return 0, err
+	}
+	if commentID <= 0 {
+		return 0, fmt.Errorf("invalid comment ID %d: must be positive", commentID)
+	}
+
+	// Review comments first: that is the namespace the comment-ID commands
+	// mostly operate on, and the only one that supports threading.
+	var reviewComment Comment
+	if err := c.restClient.Get(fmt.Sprintf("repos/%s/%s/pulls/comments/%d", owner, repo, commentID), &reviewComment); err == nil {
+		if pr, parseErr := prNumberFromParentURL(reviewComment.PullRequestURL); parseErr == nil {
+			return pr, nil
+		}
+	}
+
+	var issueComment Comment
+	if err := c.restClient.Get(fmt.Sprintf("repos/%s/%s/issues/comments/%d", owner, repo, commentID), &issueComment); err == nil {
+		if pr, parseErr := prNumberFromParentURL(issueComment.IssueURL); parseErr == nil {
+			return pr, nil
+		}
+	}
+
+	return 0, fmt.Errorf("comment #%d not found in %s/%s as either a review comment or an issue comment", commentID, owner, repo)
+}
+
+// prNumberFromParentURL pulls the trailing number off a GitHub API parent URL,
+// e.g. "https://api.github.com/repos/owner/repo/pulls/422" or ".../issues/422".
+func prNumberFromParentURL(rawURL string) (int, error) {
+	trimmed := strings.TrimRight(strings.TrimSpace(rawURL), "/")
+	if trimmed == "" {
+		return 0, fmt.Errorf("no parent URL on the comment")
+	}
+
+	slash := strings.LastIndex(trimmed, "/")
+	if slash == -1 || slash == len(trimmed)-1 {
+		return 0, fmt.Errorf("unexpected parent URL format: %q", rawURL)
+	}
+
+	number, err := strconv.Atoi(trimmed[slash+1:])
+	if err != nil || number <= 0 {
+		return 0, fmt.Errorf("could not parse a PR number out of %q", rawURL)
+	}
+
+	return number, nil
+}
+
+// FindReviewThreadForComment finds the thread ID for a review comment.
+//
+// Both axes are paginated. Previously the query asked for the first 100 threads
+// and the first 10 comments per thread and silently dropped everything past
+// those caps, which surfaced as "thread not found for comment N" — a message
+// that reads as "your comment ID is wrong" when the real problem was that the
+// comment sat eleventh in a long thread, or in the 101st thread of a busy PR.
 func (c *RealClient) FindReviewThreadForComment(owner, repo string, prNumber, commentID int) (string, error) {
 	if err := validateRepoParams(owner, repo); err != nil {
 		return "", err
@@ -201,17 +260,18 @@ func (c *RealClient) FindReviewThreadForComment(owner, repo string, prNumber, co
 	if commentID <= 0 {
 		return "", fmt.Errorf("invalid comment ID %d: must be positive", commentID)
 	}
+
 	query := `
-		query($owner: String!, $name: String!, $number: Int!) {
+		query($owner: String!, $name: String!, $number: Int!, $threadCursor: String) {
 			repository(owner: $owner, name: $name) {
 				pullRequest(number: $number) {
-					reviewThreads(first: 100) {
+					reviewThreads(first: 100, after: $threadCursor) {
+						pageInfo { hasNextPage endCursor }
 						nodes {
 							id
-							comments(first: 10) {
-								nodes {
-									databaseId
-								}
+							comments(first: 100) {
+								pageInfo { hasNextPage endCursor }
+								nodes { databaseId }
 							}
 						}
 					}
@@ -219,20 +279,16 @@ func (c *RealClient) FindReviewThreadForComment(owner, repo string, prNumber, co
 			}
 		}`
 
-	variables := map[string]interface{}{
-		"owner":  owner,
-		"name":   repo,
-		"number": prNumber,
-	}
-
 	var result struct {
 		Repository struct {
 			PullRequest struct {
 				ReviewThreads struct {
-					Nodes []struct {
+					PageInfo pageInfo `json:"pageInfo"`
+					Nodes    []struct {
 						ID       string `json:"id"`
 						Comments struct {
-							Nodes []struct {
+							PageInfo pageInfo `json:"pageInfo"`
+							Nodes    []struct {
 								DatabaseID int `json:"databaseId"`
 							} `json:"nodes"`
 						} `json:"comments"`
@@ -242,21 +298,107 @@ func (c *RealClient) FindReviewThreadForComment(owner, repo string, prNumber, co
 		} `json:"repository"`
 	}
 
-	err := c.graphqlClient.Do(query, variables, &result)
-	if err != nil {
-		return "", c.wrapAPIError(err, "find review thread for comment #%d in PR #%d (%s/%s)", commentID, prNumber, owner, repo)
+	// Threads whose comment list was itself truncated, to revisit only if the
+	// cheap pass comes up empty. Most PRs never populate this.
+	type deepThread struct {
+		id     string
+		cursor string
+	}
+	var deepThreads []deepThread
+
+	variables := map[string]interface{}{
+		"owner":        owner,
+		"name":         repo,
+		"number":       prNumber,
+		"threadCursor": (*string)(nil),
 	}
 
-	// Find the thread containing our comment
-	for _, thread := range result.Repository.PullRequest.ReviewThreads.Nodes {
-		for _, comment := range thread.Comments.Nodes {
-			if comment.DatabaseID == commentID {
-				return thread.ID, nil
+	for {
+		if err := c.graphqlClient.Do(query, variables, &result); err != nil {
+			return "", c.wrapAPIError(err, "find review thread for comment #%d in PR #%d (%s/%s)", commentID, prNumber, owner, repo)
+		}
+
+		threads := result.Repository.PullRequest.ReviewThreads
+		for _, thread := range threads.Nodes {
+			for _, comment := range thread.Comments.Nodes {
+				if comment.DatabaseID == commentID {
+					return thread.ID, nil
+				}
 			}
+			if thread.Comments.PageInfo.HasNextPage {
+				deepThreads = append(deepThreads, deepThread{id: thread.ID, cursor: thread.Comments.PageInfo.EndCursor})
+			}
+		}
+
+		if !threads.PageInfo.HasNextPage {
+			break
+		}
+		cursor := threads.PageInfo.EndCursor
+		variables["threadCursor"] = &cursor
+	}
+
+	for _, thread := range deepThreads {
+		found, err := c.commentInThreadBeyondFirstPage(thread.id, thread.cursor, commentID)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return thread.id, nil
 		}
 	}
 
-	return "", fmt.Errorf("thread not found for comment %d", commentID)
+	return "", fmt.Errorf("thread not found for comment %d in PR #%d (%s/%s)", commentID, prNumber, owner, repo)
+}
+
+// commentInThreadBeyondFirstPage walks the remaining comment pages of a single
+// review thread looking for commentID.
+func (c *RealClient) commentInThreadBeyondFirstPage(threadID, cursor string, commentID int) (bool, error) {
+	query := `
+		query($threadId: ID!, $cursor: String) {
+			node(id: $threadId) {
+				... on PullRequestReviewThread {
+					comments(first: 100, after: $cursor) {
+						pageInfo { hasNextPage endCursor }
+						nodes { databaseId }
+					}
+				}
+			}
+		}`
+
+	for {
+		var result struct {
+			Node struct {
+				Comments struct {
+					PageInfo pageInfo `json:"pageInfo"`
+					Nodes    []struct {
+						DatabaseID int `json:"databaseId"`
+					} `json:"nodes"`
+				} `json:"comments"`
+			} `json:"node"`
+		}
+
+		variables := map[string]interface{}{"threadId": threadID, "cursor": cursor}
+		if err := c.graphqlClient.Do(query, variables, &result); err != nil {
+			return false, c.wrapAPIError(err, "page comments of review thread %s looking for comment #%d", threadID, commentID)
+		}
+
+		for _, comment := range result.Node.Comments.Nodes {
+			if comment.DatabaseID == commentID {
+				return true, nil
+			}
+		}
+
+		if !result.Node.Comments.PageInfo.HasNextPage {
+			return false, nil
+		}
+		cursor = result.Node.Comments.PageInfo.EndCursor
+	}
+}
+
+// pageInfo is the GraphQL cursor-pagination envelope.
+type pageInfo struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
 }
 
 // ResolveReviewThread resolves a review thread

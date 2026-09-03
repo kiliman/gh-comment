@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/MakeNowJust/heredoc"
 
@@ -80,18 +79,17 @@ func runReact(cmd *cobra.Command, args []string) error {
 		return formatValidationError("reaction", reaction, "must be one of: +1, -1, laugh, confused, heart, hooray, rocket, eyes")
 	}
 
-	// Get repository context
-	repository, prNumber, err := getPRContext()
+	// Get repository context. The comment ID identifies its own PR, so this
+	// works off-branch.
+	repository, prNumber, err := getPRContextForComment(reactClient, commentID)
 	if err != nil {
 		return err
 	}
 
-	// Parse owner/repo
-	parts := strings.Split(repository, "/")
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid repository format: %s (expected owner/repo)", repository)
+	owner, repoName, err := splitRepo(repository)
+	if err != nil {
+		return err
 	}
-	owner, repoName := parts[0], parts[1]
 
 	if verbose {
 		fmt.Printf("Repository: %s\n", repository)

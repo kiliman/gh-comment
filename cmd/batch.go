@@ -375,7 +375,11 @@ func submitReviewWithComments(client github.GitHubAPI, owner, repo string, pr in
 		return fmt.Errorf("failed to create review: %w", err)
 	}
 
-	fmt.Printf("%s\n", ColorizeSuccess(fmt.Sprintf("Successfully created review with %d comments", commentCount)))
+	fmt.Printf("%s\n", ColorizeSuccess(fmt.Sprintf("Successfully created review with %d %s", commentCount, pluralize("comment", commentCount))))
+
+	// Show what each comment landed on (see printCommentAnchors).
+	printCommentAnchors(client, owner, repo, pr, reviewInput.Comments)
+
 	return nil
 }
 
@@ -479,6 +483,11 @@ func processIndividualComments(client github.GitHubAPI, owner, repo string, pr i
 		if err != nil {
 			return fmt.Errorf("failed to create review with %d comments: %w", len(reviewComments), err)
 		}
+
+		// This is the second path that creates a review with inline comments
+		// (the configured-review path goes through submitReviewWithComments).
+		// It needs the anchors for the same reason that one does.
+		printCommentAnchors(client, owner, repo, pr, reviewCommentInputs)
 
 		successCount += len(reviewComments)
 	}

@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/silouanwright/gh-comment/internal/github"
 )
 
 // Constants for API limits and defaults
@@ -50,7 +52,11 @@ var (
 	validOwnerPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 )
 
-// getPRContext gets the repository and PR number, handling both flag and auto-detection
+// getPRContext gets the repository and PR number, handling both flag and auto-detection.
+//
+// Use this for commands that genuinely start from a PR (add, list, review,
+// export, lines). Commands whose first argument is a comment ID should use
+// getPRContextForComment instead, which does not have to guess.
 func getPRContext() (repo string, pr int, err error) {
 	repo, err = getCurrentRepo()
 	if err != nil {
@@ -58,15 +64,80 @@ func getPRContext() (repo string, pr int, err error) {
 	}
 
 	if prNumber > 0 {
-		pr = prNumber
-	} else {
-		pr, err = getCurrentPR()
-		if err != nil {
-			return "", 0, fmt.Errorf("failed to detect PR number: %w (try specifying --pr)", err)
-		}
+		return repo, prNumber, nil
+	}
+
+	pr, err = getCurrentPRForRepo(repo)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to detect PR number: %w", err)
 	}
 
 	return repo, pr, nil
+}
+
+// getPRContextForComment resolves the repository and PR number for a command
+// whose subject is a comment ID.
+//
+// Resolution order:
+//
+//  1. --pr, if given. Explicit always wins, and it stays the escape hatch if
+//     inference ever misbehaves.
+//  2. The comment itself. Both comment namespaces hand back their parent on a
+//     plain GET, so the ID already answers which PR it lives on.
+//  3. The current branch, as before, so nothing that works today stops working.
+//
+// Step 2 sits above the branch check on purpose. The comment ID is
+// authoritative; the branch is a guess that is merely often right, and
+// reviewing someone else's PR — the case these commands exist for — is exactly
+// when you are never on its branch.
+func getPRContextForComment(client github.GitHubAPI, commentID int) (repo string, pr int, err error) {
+	repo, err = getCurrentRepo()
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to get repository: %w", err)
+	}
+
+	if prNumber > 0 {
+		return repo, prNumber, nil
+	}
+
+	owner, repoName, err := splitRepo(repo)
+	if err != nil {
+		return "", 0, err
+	}
+
+	pr, lookupErr := client.GetPRNumberForComment(owner, repoName, commentID)
+	if lookupErr == nil {
+		if verbose {
+			// No "PR" here: the parent may be a plain issue, and claiming
+			// otherwise would misreport what was actually resolved.
+			fmt.Printf("Resolved #%d from comment #%d\n", pr, commentID)
+		}
+		return repo, pr, nil
+	}
+
+	pr, branchErr := getCurrentPRForRepo(repo)
+	if branchErr != nil {
+		return "", 0, fmt.Errorf("could not determine which PR comment #%d belongs to:\n  • comment lookup: %v\n  • current branch: %v\n\n💡 Specify the PR explicitly with --pr", commentID, lookupErr, branchErr)
+	}
+
+	return repo, pr, nil
+}
+
+// splitRepo splits an "owner/repo" string into its two halves.
+func splitRepo(repository string) (owner, name string, err error) {
+	parts := strings.Split(repository, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("invalid repository format: %s (expected owner/repo)", repository)
+	}
+	return parts[0], parts[1], nil
+}
+
+// pluralize returns word with an "s" appended unless count is exactly 1.
+func pluralize(word string, count int) string {
+	if count == 1 {
+		return word
+	}
+	return word + "s"
 }
 
 // formatAPIError creates consistent error messages for API failures

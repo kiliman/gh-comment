@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/silouanwright/gh-comment/internal/github"
 )
@@ -542,4 +543,22 @@ comments:
 
 	err = runBatch(nil, []string{"123", configFile})
 	assert.NoError(t, err)
+}
+
+func TestProcessIndividualCommentsPrintsAnchors(t *testing.T) {
+	// batch.go creates reviews down two separate paths. submitReviewWithComments
+	// handles the configured-review case; this one runs when config.Review is
+	// nil. Both attach inline comments, so both need to say where they landed —
+	// missing one leaves exactly the blind spot the anchors exist to close.
+	client := github.NewMockClient()
+
+	output := captureOutput(func() {
+		err := processIndividualComments(client, "owner", "repo", 123, []CommentConfig{
+			{File: "main.go", Line: 42, Message: "a review comment"},
+		})
+		require.NoError(t, err)
+	})
+
+	assert.Contains(t, output, "main.go:42", "the individual-comment path must print anchors too")
+	assert.Contains(t, output, `println(\"hello\")`)
 }

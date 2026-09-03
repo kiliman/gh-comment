@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetCurrentRepo(t *testing.T) {
@@ -117,28 +119,23 @@ func TestGetCurrentRepo_EmptyGlobalVariable(t *testing.T) {
 func TestGetCurrentPRZeroCase(t *testing.T) {
 	// Save original state
 	originalPRNumber := prNumber
-	defer func() { prNumber = originalPRNumber }()
+	originalRepo := repo
+	defer func() { prNumber = originalPRNumber; repo = originalRepo }()
 
-	// Test the branch where prNumber is 0 (would trigger gh CLI call)
-	// This is the missing coverage case not tested in current_pr_test.go
-	t.Run("zero prNumber triggers gh CLI path", func(t *testing.T) {
+	t.Run("zero prNumber falls through to branch detection", func(t *testing.T) {
+		repo = "owner/repo"
 		prNumber = 0 // This will trigger the gh CLI execution path
+		calls := stubGhExec(t, "", fmt.Errorf("exit status 1"))
 
-		gotPR, err := getCurrentPR()
+		gotRepo, gotPR, err := getPRContext()
 
-		// In test environment, this will likely fail since gh CLI call may not work
-		// We're mainly testing that the function handles the zero prNumber case
-		// and provides descriptive error messages
-		if err != nil {
-			// Expected case in test environment - gh CLI call may fail
-			assert.Contains(t, err.Error(), "failed to get current PR",
-				"Error should be descriptive when gh CLI fails")
-			assert.Contains(t, err.Error(), "try specifying --pr",
-				"Error should suggest using --pr flag")
-			assert.Equal(t, 0, gotPR, "PR should be 0 when error occurs")
-		} else {
-			// If it succeeds, we should get a positive PR number
-			assert.Greater(t, gotPR, 0, "If no error, PR should be positive")
-		}
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to detect PR number",
+			"Error should be descriptive when gh CLI fails")
+		assert.Contains(t, err.Error(), "try specifying --pr",
+			"Error should suggest using --pr flag")
+		assert.Equal(t, 0, gotPR, "PR should be 0 when error occurs")
+		assert.Empty(t, gotRepo)
+		assert.Len(t, *calls, 1, "should have consulted the gh CLI exactly once")
 	})
 }

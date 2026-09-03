@@ -75,8 +75,8 @@ var rootCmd = &cobra.Command{
 		      --author string     Filter by author (supports wildcards: 'user*')
 		      --since string      Show comments after date ('2024-01-01', '1 week ago')
 		      --until string      Show comments before date
-		      --status string     Filter by status: open, resolved, all
 		      --type string       Filter by type: issue, review
+		      --recent            Show only comments from the last 7 days
 		  -q, --quiet            Minimal output for scripts
 
 		Review Flags:
@@ -100,9 +100,9 @@ var rootCmd = &cobra.Command{
 		  --event REQUEST_CHANGES
 
 		# Advanced Filtering (Power User Features)
-		$ gh comment list 123 --author "senior-dev*" --status open --since "1 week ago"
+		$ gh comment list 123 --author "senior-dev*" --since "1 week ago"
 		$ gh comment list 123 --type review --author "*@company.com" --since "2024-01-01"
-		$ gh comment list 123 --status resolved --until "2024-01-01" --quiet
+		$ gh comment list 123 --type review --until "2024-01-01" --quiet
 
 		# Review Workflows (Professional Code Review)
 		$ gh comment review 123 "Migration review complete" \
@@ -137,7 +137,7 @@ var rootCmd = &cobra.Command{
 		$ gh comment add 123 src/api.js 42 "[SUGGEST:+2: const timeout = 5000;]"
 		$ gh comment add 123 src/utils.js 15 "[SUGGEST:-1: import { validateInput } from './validators';]"
 		$ for file in $(git diff --name-only); do gh comment add 123 "$file" 1 "Auto-generated security scan results"; done
-		$ gh comment list --since "1 week ago" --type review --status open | review-blocker-analysis.sh
+		$ gh comment list --since "1 week ago" --type review | review-blocker-analysis.sh
 
 		# Advanced Comment Management
 		$ gh comment edit 2246362251 "Updated: This rate limiting logic handles concurrent requests properly"
@@ -221,6 +221,10 @@ func applyConfigDefaults(config *Config) {
 	}
 }
 
+// ghExec is the seam through which gh CLI subprocesses are run. Tests replace
+// it so unit tests never shell out to the real CLI.
+var ghExec = gh.Exec
+
 // Helper function to get current repository if not specified
 func getCurrentRepo() (string, error) {
 	if repo != "" {
@@ -228,7 +232,7 @@ func getCurrentRepo() (string, error) {
 	}
 
 	// Use gh CLI to get current repository
-	stdout, _, err := gh.Exec("repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner")
+	stdout, _, err := ghExec("repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner")
 	if err != nil {
 		return "", fmt.Errorf("failed to get current repository: %w", err)
 	}
@@ -236,16 +240,31 @@ func getCurrentRepo() (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// Helper function to get current PR number if not specified
-func getCurrentPR() (int, error) {
-	if prNumber != 0 {
-		return prNumber, nil
+// getCurrentPRForRepo detects the PR for the current branch within the given
+// repository.
+//
+// The repository is passed through to the subprocess so that branch detection
+// asks about the same repository every other part of the call is using. Without
+// it, gh resolves against the current working directory regardless of --repo,
+// which pairs a PR number from one repository with the name of another and can
+// land writes on a real-but-unrelated PR.
+//
+// This deliberately does not consult the prNumber global. Flag precedence
+// belongs to the caller (see getPRContext); reading it here made the function
+// look like it owned that decision, which is how a caller ends up assuming it
+// is safe to call directly.
+func getCurrentPRForRepo(repository string) (int, error) {
+	args := []string{"pr", "view", "--json", "number", "-q", ".number"}
+	target := "the current repository"
+	if repository != "" {
+		args = append(args, "--repo", repository)
+		target = repository
 	}
 
 	// Use gh CLI to get PR for current branch
-	stdout, _, err := gh.Exec("pr", "view", "--json", "number", "-q", ".number")
+	stdout, _, err := ghExec(args...)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get current PR: %w (try specifying --pr)", err)
+		return 0, fmt.Errorf("failed to get current PR for %s: %w (try specifying --pr)", target, err)
 	}
 
 	prStr := strings.TrimSpace(stdout.String())

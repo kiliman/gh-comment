@@ -208,21 +208,22 @@ func TestEdgeCasesAndCornerCases(t *testing.T) {
 		// This would be covered by integration tests
 	})
 
-	t.Run("getCurrentPR edge cases", func(t *testing.T) {
+	t.Run("getPRContext edge cases", func(t *testing.T) {
 		// Test with PR already set (no API call)
+		repo = "preset/repo"
 		prNumber = 123
-		result, err := getCurrentPR()
+		gotRepo, result, err := getPRContext()
 		assert.NoError(t, err)
 		assert.Equal(t, 123, result)
+		assert.Equal(t, "preset/repo", gotRepo)
 
-		// Test with negative PR (no API call)
+		// A non-positive --pr is not a valid override, so it falls through to
+		// branch detection rather than being passed along as a PR number.
 		prNumber = -1
-		result, err = getCurrentPR()
+		stubGhExec(t, "77\n", nil)
+		_, result, err = getPRContext()
 		assert.NoError(t, err)
-		assert.Equal(t, -1, result)
-
-		// Skip testing with zero PR to avoid real API calls
-		// This would be covered by integration tests
+		assert.Equal(t, 77, result)
 	})
 
 	t.Run("validateReaction edge cases", func(t *testing.T) {
@@ -286,7 +287,7 @@ func TestGlobalVariableEdgeCases(t *testing.T) {
 					getCurrentRepo() // Will return preset repo
 				})
 				assert.NotPanics(t, func() {
-					getCurrentPR() // Will return preset PR number
+					getPRContext() // Will return preset repo and PR number
 				})
 			})
 		}

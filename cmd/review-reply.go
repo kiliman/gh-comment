@@ -108,8 +108,10 @@ func runReviewReply(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Get repository context
-	repository, prNumber, err := getPRContext()
+	// Get repository context. The comment ID identifies its own PR, so this
+	// works from any branch — including main, which is where you always are
+	// when reviewing someone else's PR.
+	repository, prNumber, err := getPRContextForComment(reviewReplyClient, commentID)
 	if err != nil {
 		return err
 	}
@@ -119,12 +121,10 @@ func runReviewReply(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Parse owner/repo
-	parts := strings.Split(repository, "/")
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid repository format: %s (expected owner/repo)", repository)
+	owner, repoName, err := splitRepo(repository)
+	if err != nil {
+		return err
 	}
-	owner, repoName := parts[0], parts[1]
 
 	if verbose {
 		fmt.Printf("Repository: %s\n", repository)
@@ -150,7 +150,24 @@ func runReviewReply(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Resolve the thread ID *before* writing anything.
+	//
+	// This command performs up to two writes and they are not atomic. Posting
+	// the reply first meant a failed thread lookup left the reply already
+	// committed, with an error that gave no hint of it — and the natural
+	// response to an error is to run the command again, which double-posts.
+	// Looking up first means nothing is written until both halves are known to
+	// be viable, so a failure aborts cleanly and retrying is safe.
+	var threadID string
+	if resolveConversationReviewReply {
+		threadID, err = reviewReplyClient.FindReviewThreadForComment(owner, repoName, prNumber, commentID)
+		if err != nil {
+			return fmt.Errorf("failed to find review thread for comment #%d in PR #%d: %w\n\n💡 Nothing was posted, so this is safe to retry.\n  • If the PR number looks wrong, pass the right one with --pr\n  • Only review comments live in threads; issue comments cannot be resolved", commentID, prNumber, err)
+		}
+	}
+
 	// Handle message reply
+	replyPosted := false
 	if message != "" {
 		// Expand suggestions if enabled
 		if !noExpandSuggestionsReviewReply {
@@ -163,20 +180,21 @@ func runReviewReply(cmd *cobra.Command, args []string) error {
 			// Enhanced error handling with intelligent fallback suggestions
 			return handleReviewReplyError(err, commentID, message, owner, repoName, prNumber)
 		}
+		replyPosted = true
 		fmt.Printf("✅ Replied to review comment #%d: %s\n", commentID, message)
 	}
 
 	// Handle resolve conversation
 	if resolveConversationReviewReply {
-		// Find the thread ID for this comment
-		threadID, err := reviewReplyClient.FindReviewThreadForComment(owner, repoName, prNumber, commentID)
-		if err != nil {
-			return fmt.Errorf("failed to find review thread: %w", err)
-		}
-
-		// Resolve the thread
-		err = reviewReplyClient.ResolveReviewThread(threadID)
-		if err != nil {
+		if err := reviewReplyClient.ResolveReviewThread(threadID); err != nil {
+			// The reply is already committed at this point. Say so, and hand
+			// over the one-liner that finishes the job, because re-running this
+			// command would post the reply a second time.
+			if replyPosted {
+				fmt.Printf("⚠️  Reply posted, but the conversation was NOT resolved.\n")
+				fmt.Printf("    Finish with:  gh comment resolve %d --pr %d\n", commentID, prNumber)
+				fmt.Printf("    Do not re-run review-reply — it would post the reply again.\n\n")
+			}
 			return fmt.Errorf("failed to resolve conversation: %w", err)
 		}
 		fmt.Printf("✅ Resolved conversation for review comment #%d\n", commentID)

@@ -18,7 +18,9 @@ stdout 'This looks good to me!'
 ! stderr .
 
 # Test date range filtering
-exec gh-comment list 123 --since '2023-01-01' --until '2025-12-31' --repo test-owner/test-repo --dry-run
+# Both ends are relative: the mock comments are created at the current time, so
+# a hardcoded upper bound silently stops matching once the calendar passes it.
+exec gh-comment list 123 --since '2023-01-01' --until 'tomorrow' --repo test-owner/test-repo --dry-run
 stdout 'Comments on PR #123'
 stdout 'This looks good to me!'
 ! stderr .
@@ -46,17 +48,16 @@ stdout 'Comments on PR #123'
 stdout 'This looks good to me!'
 ! stderr .
 
-# Test status filtering (open/resolved/all)
-exec gh-comment list 123 --status open --repo test-owner/test-repo --dry-run
-stdout 'Comments on PR #123'
-stdout 'This looks good to me!'
-! stderr .
-
-exec gh-comment list 123 --status all --repo test-owner/test-repo --dry-run
+# List shows every comment by default (there is no --status flag to opt in with)
+exec gh-comment list 123 --repo test-owner/test-repo --dry-run
 stdout 'Comments on PR #123'
 stdout 'This looks good to me!'
 stdout 'Please fix the typo'
 ! stderr .
+
+# And rejects the flag it used to have, rather than silently ignoring it
+! exec gh-comment list 123 --status open --repo test-owner/test-repo --dry-run
+stderr 'unknown flag: --status'
 
 # Test multiple filter combinations
 exec gh-comment list 123 --author 'reviewer' --type review --since '1 day ago' --repo test-owner/test-repo --dry-run

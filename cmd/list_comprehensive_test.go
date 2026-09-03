@@ -335,6 +335,10 @@ func (m *MockGitHubClientForList) CreateReviewCommentReply(owner, repo string, c
 	return nil, nil
 }
 
+func (m *MockGitHubClientForList) GetPRNumberForComment(owner, repo string, commentID int) (int, error) {
+	return 0, nil
+}
+
 func (m *MockGitHubClientForList) FindReviewThreadForComment(owner, repo string, prNumber, commentID int) (string, error) {
 	return "", nil
 }
