@@ -39,3 +39,6 @@ config.json
 # OS files
 .DS_Store
 Thumbs.db
+
+# Release binaries produced by scripts/build-release.sh
+dist/
