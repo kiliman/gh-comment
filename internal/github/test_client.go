@@ -268,6 +268,10 @@ func (c *TestClient) GetPRNumberForComment(owner, repo string, commentID int) (i
 	return 0, fmt.Errorf("not implemented in test client")
 }
 
+func (c *TestClient) ListReviewThreads(owner, repo string, prNumber int) ([]ReviewThread, error) {
+	return nil, fmt.Errorf("not implemented in test client")
+}
+
 func (c *TestClient) ResolveReviewThread(threadID string) error {
 	return fmt.Errorf("not implemented in test client")
 }

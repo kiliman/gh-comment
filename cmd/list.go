@@ -27,6 +27,7 @@ var (
 	since      string
 	until      string
 	listType   string
+	listStatus string // "open", "resolved", or "all"
 
 	// Output format flags
 	outputFormat string
@@ -51,8 +52,10 @@ var listCmd = &cobra.Command{
 		- Issue comments: General PR discussion, appear in main conversation tab
 		- Review comments: Line-specific feedback, appear in "Files Changed" tab
 
-		Comments can be filtered by type, author, date range, and more.
-		Note: GitHub's REST API does not provide comment resolution status.
+		Comments can be filtered by type, author, date range, and resolution status.
+
+		Resolution status comes from review threads, so only review comments can
+		be resolved. Issue comments have no thread and always count as open.
 
 		Output can be formatted as tables, JSON, or plain text with color coding.
 		Perfect for code review workflows, comment analysis, and automation.
@@ -110,6 +113,7 @@ func init() {
 	listCmd.Flags().StringVar(&since, "since", "", "Show comments after this date/time (flexible formats)")
 	listCmd.Flags().StringVar(&until, "until", "", "Show comments before this date/time (flexible formats)")
 	listCmd.Flags().StringVar(&listType, "type", "", "Filter by type (issue|review)")
+	listCmd.Flags().StringVar(&listStatus, "status", "all", "Filter by resolution status (open|resolved|all)")
 
 	// Display flags
 	listCmd.Flags().BoolVar(&quiet, "quiet", false, "Minimal output (hides URLs and formatting)")
@@ -288,6 +292,10 @@ type Comment struct {
 
 	// Comment type
 	Type string `json:"type"` // "issue" or "review"
+
+	// Resolution state of the review thread this comment belongs to.
+	// Issue comments have no thread and are therefore never resolved.
+	Resolved bool `json:"resolved"`
 }
 
 func fetchAllComments(client github.GitHubAPI, repo string, pr int) ([]Comment, error) {
@@ -324,6 +332,22 @@ func fetchAllComments(client github.GitHubAPI, repo string, pr int) ([]Comment, 
 		return nil, fmt.Errorf("failed to fetch review comments: %w", err)
 	}
 
+	// Resolution state lives on review threads in GraphQL, not on the REST
+	// comment payloads, so it costs an extra query. Only pay for it when a
+	// filter actually asks — the default listing does not.
+	resolved := map[int]bool{}
+	if listStatus == "open" || listStatus == "resolved" {
+		threads, err := client.ListReviewThreads(owner, repoName, pr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch review threads (needed for --status): %w", err)
+		}
+		for _, thread := range threads {
+			for _, id := range thread.CommentIDs {
+				resolved[id] = thread.IsResolved
+			}
+		}
+	}
+
 	for _, comment := range reviewComments {
 		allComments = append(allComments, Comment{
 			ID:        comment.ID,
@@ -335,6 +359,9 @@ func fetchAllComments(client github.GitHubAPI, repo string, pr int) ([]Comment, 
 			Line:      comment.Line,
 			CommitID:  comment.CommitID,
 			Type:      "review",
+			// A comment in no thread we know of counts as open, which is also
+			// what a comment on a PR with no threads at all should read as.
+			Resolved: resolved[comment.ID],
 		})
 	}
 
@@ -379,6 +406,12 @@ func validateAndParseFilters() error {
 	validTypes := []string{"", "issue", "review"}
 	if listType != "" && !containsString(validTypes, listType) {
 		return fmt.Errorf("invalid type '%s'. Must be one of: issue, review", listType)
+	}
+
+	// Validate resolution status flag
+	validStatuses := []string{"", "open", "resolved", "all"}
+	if !containsString(validStatuses, listStatus) {
+		return fmt.Errorf("invalid status '%s'. Must be one of: open, resolved, all", listStatus)
 	}
 
 	// Validate output format flag
@@ -443,6 +476,15 @@ func filterComments(comments []Comment) []Comment {
 
 		// Filter by comment type
 		if listType != "" && comment.Type != listType {
+			continue
+		}
+
+		// Filter by resolution status. Only review comments live in threads,
+		// so an issue comment is never resolved and always counts as open.
+		if listStatus == "open" && comment.Resolved {
+			continue
+		}
+		if listStatus == "resolved" && !comment.Resolved {
 			continue
 		}
 

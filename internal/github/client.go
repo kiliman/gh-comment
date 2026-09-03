@@ -38,6 +38,7 @@ type GitHubAPI interface {
 	// GraphQL operations
 	ResolveReviewThread(threadID string) error
 	FindReviewThreadForComment(owner, repo string, prNumber, commentID int) (string, error)
+	ListReviewThreads(owner, repo string, prNumber int) ([]ReviewThread, error)
 }
 
 // Comment represents a GitHub comment (issue or review)
@@ -105,6 +106,7 @@ type MockClient struct {
 	PendingReviewID   int
 	SubmittedReviewID int
 	CommentPRNumber   int
+	ReviewThreads     []ReviewThread
 
 	// Call tracking for regression tests
 	CreateReviewCalls []ReviewInput
@@ -116,6 +118,7 @@ type MockClient struct {
 	ResolveThreadError         error
 	FindReviewThreadError      error
 	GetPRNumberForCommentError error
+	ListReviewThreadsError     error
 	FindPendingReviewError     error
 	SubmitReviewError          error
 }
@@ -213,6 +216,13 @@ func (m *MockClient) FindReviewThreadForComment(owner, repo string, prNumber, co
 		return "", m.FindReviewThreadError
 	}
 	return "RT_123", nil
+}
+
+func (m *MockClient) ListReviewThreads(owner, repo string, prNumber int) ([]ReviewThread, error) {
+	if m.ListReviewThreadsError != nil {
+		return nil, m.ListReviewThreadsError
+	}
+	return m.ReviewThreads, nil
 }
 
 func (m *MockClient) ResolveReviewThread(threadID string) error {
