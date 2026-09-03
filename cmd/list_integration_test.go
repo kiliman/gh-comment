@@ -240,6 +240,10 @@ func (m *MockGitHubClient) ResolveReviewThread(threadID string) error {
 	return fmt.Errorf("not implemented")
 }
 
+func (m *MockGitHubClient) ListReviewThreads(owner, repo string, prNumber int) ([]github.ReviewThread, error) {
+	return nil, nil
+}
+
 func (m *MockGitHubClient) GetPRNumberForComment(owner, repo string, commentID int) (int, error) {
 	return 0, nil
 }

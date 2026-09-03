@@ -272,6 +272,10 @@ func (m *ReactMockClient) CreateReviewCommentReply(owner, repo string, commentID
 	return &github.Comment{ID: 456, Body: body}, nil
 }
 
+func (m *ReactMockClient) ListReviewThreads(owner, repo string, prNumber int) ([]github.ReviewThread, error) {
+	return nil, nil
+}
+
 func (m *ReactMockClient) GetPRNumberForComment(owner, repo string, commentID int) (int, error) {
 	return 0, nil
 }

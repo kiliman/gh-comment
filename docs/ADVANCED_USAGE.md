@@ -19,7 +19,7 @@ gh comment list 123 --since "1 week ago" --until "yesterday"
 gh comment list 123 --since "2024-01-01" --until "2024-03-31"
 
 # Combined filtering for analysis
-gh comment list 123 --type review --author "team-lead*" --since "1 week ago"
+gh comment list 123 --type review --status open --author "team-lead*" --since "1 week ago"
 ```
 
 **Use cases:**
@@ -198,7 +198,7 @@ PR=$1
 echo "🧹 Cleaning up resolved conversations on PR #$PR"
 
 # Get resolved review comment IDs
-RESOLVED_IDS=$(gh comment list $PR --type review --quiet | \
+RESOLVED_IDS=$(gh comment list $PR --type review --status resolved --quiet | \
   grep "ID:" | cut -d':' -f2)
 
 # Add celebration reactions to resolved comments
@@ -332,7 +332,7 @@ gh comment batch 123 review.yaml --validate=false
 **Large PR performance:**
 ```bash  
 # Use filtering to reduce data transfer
-gh comment list 123 --type review --since "1 week ago"
+gh comment list 123 --type review --status open --since "1 week ago"
 
 # Export and process locally for analysis
 gh comment export 123 | jq '.[] | select(.type == "review")'

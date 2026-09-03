@@ -48,16 +48,21 @@ stdout 'Comments on PR #123'
 stdout 'This looks good to me!'
 ! stderr .
 
-# List shows every comment by default (there is no --status flag to opt in with)
+# List shows every comment by default
 exec gh-comment list 123 --repo test-owner/test-repo --dry-run
 stdout 'Comments on PR #123'
 stdout 'This looks good to me!'
 stdout 'Please fix the typo'
 ! stderr .
 
-# And rejects the flag it used to have, rather than silently ignoring it
-! exec gh-comment list 123 --status open --repo test-owner/test-repo --dry-run
-stderr 'unknown flag: --status'
+# Resolution status filtering
+exec gh-comment list 123 --status all --repo test-owner/test-repo --dry-run
+stdout 'Comments on PR #123'
+! stderr .
+
+# An unknown status is rejected rather than silently ignored
+! exec gh-comment list 123 --status bogus --repo test-owner/test-repo --dry-run
+stderr 'invalid status'
 
 # Test multiple filter combinations
 exec gh-comment list 123 --author 'reviewer' --type review --since '1 day ago' --repo test-owner/test-repo --dry-run

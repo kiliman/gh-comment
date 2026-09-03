@@ -243,6 +243,142 @@ func prNumberFromParentURL(rawURL string) (int, error) {
 	return number, nil
 }
 
+// reviewThreadsQuery pages a PR's review threads. Both the thread list and each
+// thread's comments are cursor-paginated; asking for a fixed slice of either
+// drops the tail silently.
+const reviewThreadsQuery = `
+	query($owner: String!, $name: String!, $number: Int!, $threadCursor: String) {
+		repository(owner: $owner, name: $name) {
+			pullRequest(number: $number) {
+				reviewThreads(first: 100, after: $threadCursor) {
+					pageInfo { hasNextPage endCursor }
+					nodes {
+						id
+						isResolved
+						comments(first: 100) {
+							pageInfo { hasNextPage endCursor }
+							nodes { databaseId }
+						}
+					}
+				}
+			}
+		}
+	}`
+
+// pageInfo is the GraphQL cursor-pagination envelope.
+type pageInfo struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
+}
+
+type reviewThreadNode struct {
+	ID         string `json:"id"`
+	IsResolved bool   `json:"isResolved"`
+	Comments   struct {
+		PageInfo pageInfo `json:"pageInfo"`
+		Nodes    []struct {
+			DatabaseID int `json:"databaseId"`
+		} `json:"nodes"`
+	} `json:"comments"`
+}
+
+// ReviewThread is one review conversation on a pull request.
+type ReviewThread struct {
+	ID         string
+	IsResolved bool
+	CommentIDs []int
+}
+
+// walkReviewThreads pages through a PR's review threads, handing each page to
+// visit. visit returns true to stop early — which lets a lookup quit as soon as
+// it has what it came for instead of paging the whole PR.
+func (c *RealClient) walkReviewThreads(owner, repo string, prNumber int, visit func([]reviewThreadNode) bool) error {
+	variables := map[string]interface{}{
+		"owner":        owner,
+		"name":         repo,
+		"number":       prNumber,
+		"threadCursor": (*string)(nil),
+	}
+
+	for {
+		var result struct {
+			Repository struct {
+				PullRequest struct {
+					ReviewThreads struct {
+						PageInfo pageInfo           `json:"pageInfo"`
+						Nodes    []reviewThreadNode `json:"nodes"`
+					} `json:"reviewThreads"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		}
+
+		if err := c.graphqlClient.Do(reviewThreadsQuery, variables, &result); err != nil {
+			return err
+		}
+
+		threads := result.Repository.PullRequest.ReviewThreads
+		if visit(threads.Nodes) {
+			return nil
+		}
+		if !threads.PageInfo.HasNextPage {
+			return nil
+		}
+
+		cursor := threads.PageInfo.EndCursor
+		variables["threadCursor"] = &cursor
+	}
+}
+
+// ListReviewThreads returns every review thread on a PR with its resolution
+// state, fully paginated on both axes.
+//
+// Unlike FindReviewThreadForComment this cannot stop early — a caller
+// classifying comments needs every thread — so threads whose comment list was
+// truncated are deepened eagerly rather than lazily.
+func (c *RealClient) ListReviewThreads(owner, repo string, prNumber int) ([]ReviewThread, error) {
+	if err := validateRepoParams(owner, repo); err != nil {
+		return nil, err
+	}
+	if prNumber <= 0 {
+		return nil, fmt.Errorf("invalid PR number %d: must be positive", prNumber)
+	}
+
+	var threads []ReviewThread
+	type truncated struct {
+		index  int
+		cursor string
+	}
+	var deep []truncated
+
+	err := c.walkReviewThreads(owner, repo, prNumber, func(nodes []reviewThreadNode) bool {
+		for _, node := range nodes {
+			thread := ReviewThread{ID: node.ID, IsResolved: node.IsResolved}
+			for _, comment := range node.Comments.Nodes {
+				thread.CommentIDs = append(thread.CommentIDs, comment.DatabaseID)
+			}
+			threads = append(threads, thread)
+
+			if node.Comments.PageInfo.HasNextPage {
+				deep = append(deep, truncated{index: len(threads) - 1, cursor: node.Comments.PageInfo.EndCursor})
+			}
+		}
+		return false
+	})
+	if err != nil {
+		return nil, c.wrapAPIError(err, "list review threads for PR #%d (%s/%s)", prNumber, owner, repo)
+	}
+
+	for _, t := range deep {
+		rest, err := c.remainingThreadCommentIDs(threads[t.index].ID, t.cursor)
+		if err != nil {
+			return nil, err
+		}
+		threads[t.index].CommentIDs = append(threads[t.index].CommentIDs, rest...)
+	}
+
+	return threads, nil
+}
+
 // FindReviewThreadForComment finds the thread ID for a review comment.
 //
 // Both axes are paginated. Previously the query asked for the first 100 threads
@@ -261,43 +397,6 @@ func (c *RealClient) FindReviewThreadForComment(owner, repo string, prNumber, co
 		return "", fmt.Errorf("invalid comment ID %d: must be positive", commentID)
 	}
 
-	query := `
-		query($owner: String!, $name: String!, $number: Int!, $threadCursor: String) {
-			repository(owner: $owner, name: $name) {
-				pullRequest(number: $number) {
-					reviewThreads(first: 100, after: $threadCursor) {
-						pageInfo { hasNextPage endCursor }
-						nodes {
-							id
-							comments(first: 100) {
-								pageInfo { hasNextPage endCursor }
-								nodes { databaseId }
-							}
-						}
-					}
-				}
-			}
-		}`
-
-	var result struct {
-		Repository struct {
-			PullRequest struct {
-				ReviewThreads struct {
-					PageInfo pageInfo `json:"pageInfo"`
-					Nodes    []struct {
-						ID       string `json:"id"`
-						Comments struct {
-							PageInfo pageInfo `json:"pageInfo"`
-							Nodes    []struct {
-								DatabaseID int `json:"databaseId"`
-							} `json:"nodes"`
-						} `json:"comments"`
-					} `json:"nodes"`
-				} `json:"reviewThreads"`
-			} `json:"pullRequest"`
-		} `json:"repository"`
-	}
-
 	// Threads whose comment list was itself truncated, to revisit only if the
 	// cheap pass comes up empty. Most PRs never populate this.
 	type deepThread struct {
@@ -305,54 +404,47 @@ func (c *RealClient) FindReviewThreadForComment(owner, repo string, prNumber, co
 		cursor string
 	}
 	var deepThreads []deepThread
+	var found string
 
-	variables := map[string]interface{}{
-		"owner":        owner,
-		"name":         repo,
-		"number":       prNumber,
-		"threadCursor": (*string)(nil),
-	}
-
-	for {
-		if err := c.graphqlClient.Do(query, variables, &result); err != nil {
-			return "", c.wrapAPIError(err, "find review thread for comment #%d in PR #%d (%s/%s)", commentID, prNumber, owner, repo)
-		}
-
-		threads := result.Repository.PullRequest.ReviewThreads
-		for _, thread := range threads.Nodes {
+	err := c.walkReviewThreads(owner, repo, prNumber, func(nodes []reviewThreadNode) bool {
+		for _, thread := range nodes {
 			for _, comment := range thread.Comments.Nodes {
 				if comment.DatabaseID == commentID {
-					return thread.ID, nil
+					found = thread.ID
+					return true
 				}
 			}
 			if thread.Comments.PageInfo.HasNextPage {
 				deepThreads = append(deepThreads, deepThread{id: thread.ID, cursor: thread.Comments.PageInfo.EndCursor})
 			}
 		}
-
-		if !threads.PageInfo.HasNextPage {
-			break
-		}
-		cursor := threads.PageInfo.EndCursor
-		variables["threadCursor"] = &cursor
+		return false
+	})
+	if err != nil {
+		return "", c.wrapAPIError(err, "find review thread for comment #%d in PR #%d (%s/%s)", commentID, prNumber, owner, repo)
+	}
+	if found != "" {
+		return found, nil
 	}
 
 	for _, thread := range deepThreads {
-		found, err := c.commentInThreadBeyondFirstPage(thread.id, thread.cursor, commentID)
+		rest, err := c.remainingThreadCommentIDs(thread.id, thread.cursor)
 		if err != nil {
 			return "", err
 		}
-		if found {
-			return thread.id, nil
+		for _, id := range rest {
+			if id == commentID {
+				return thread.id, nil
+			}
 		}
 	}
 
 	return "", fmt.Errorf("thread not found for comment %d in PR #%d (%s/%s)", commentID, prNumber, owner, repo)
 }
 
-// commentInThreadBeyondFirstPage walks the remaining comment pages of a single
-// review thread looking for commentID.
-func (c *RealClient) commentInThreadBeyondFirstPage(threadID, cursor string, commentID int) (bool, error) {
+// remainingThreadCommentIDs walks the comment pages of a single review thread
+// past the first, returning the database IDs it finds.
+func (c *RealClient) remainingThreadCommentIDs(threadID, cursor string) ([]int, error) {
 	query := `
 		query($threadId: ID!, $cursor: String) {
 			node(id: $threadId) {
@@ -365,6 +457,7 @@ func (c *RealClient) commentInThreadBeyondFirstPage(threadID, cursor string, com
 			}
 		}`
 
+	var ids []int
 	for {
 		var result struct {
 			Node struct {
@@ -379,26 +472,18 @@ func (c *RealClient) commentInThreadBeyondFirstPage(threadID, cursor string, com
 
 		variables := map[string]interface{}{"threadId": threadID, "cursor": cursor}
 		if err := c.graphqlClient.Do(query, variables, &result); err != nil {
-			return false, c.wrapAPIError(err, "page comments of review thread %s looking for comment #%d", threadID, commentID)
+			return nil, c.wrapAPIError(err, "page comments of review thread %s", threadID)
 		}
 
 		for _, comment := range result.Node.Comments.Nodes {
-			if comment.DatabaseID == commentID {
-				return true, nil
-			}
+			ids = append(ids, comment.DatabaseID)
 		}
 
 		if !result.Node.Comments.PageInfo.HasNextPage {
-			return false, nil
+			return ids, nil
 		}
 		cursor = result.Node.Comments.PageInfo.EndCursor
 	}
-}
-
-// pageInfo is the GraphQL cursor-pagination envelope.
-type pageInfo struct {
-	HasNextPage bool   `json:"hasNextPage"`
-	EndCursor   string `json:"endCursor"`
 }
 
 // ResolveReviewThread resolves a review thread
