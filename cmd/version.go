@@ -11,7 +11,7 @@ import (
 // This is the one place to bump on release, and it must match the git tag.
 // CI overrides it from the tag at link time (see .github/workflows/release.yml)
 // so a tagged build can never disagree with its tag.
-var releaseVersion = "0.2.0"
+var releaseVersion = "0.2.1"
 
 // versionString reports what is actually running: the semantic version plus
 // the commit it was built from.
@@ -23,11 +23,11 @@ var releaseVersion = "0.2.0"
 // unanswerable. A working tree with uncommitted changes is marked dirty,
 // since that build corresponds to no commit at all.
 func versionString() string {
-	revision, buildTime, modified, ok := vcsBuildInfo()
+	revision, commitTime, modified, ok := vcsBuildInfo()
 	if !ok {
 		return releaseVersion
 	}
-	return formatVersion(releaseVersion, revision, buildTime, modified)
+	return formatVersion(releaseVersion, revision, commitTime, modified)
 }
 
 // formatVersion renders the reported version from explicit inputs.
@@ -36,7 +36,7 @@ func versionString() string {
 // carry none, so a test calling versionString() can only skip. Keeping the
 // formatting pure is what makes the dirty marker and the SHA shortening
 // actually testable.
-func formatVersion(release, revision, buildTime string, modified bool) string {
+func formatVersion(release, revision, commitTime string, modified bool) string {
 	var details []string
 
 	if revision != "" {
@@ -49,8 +49,8 @@ func formatVersion(release, revision, buildTime string, modified bool) string {
 		}
 		details = append(details, short)
 	}
-	if buildTime != "" {
-		details = append(details, "built "+buildTime)
+	if commitTime != "" {
+		details = append(details, "committed "+commitTime)
 	}
 
 	if len(details) == 0 {
@@ -60,7 +60,7 @@ func formatVersion(release, revision, buildTime string, modified bool) string {
 }
 
 // vcsBuildInfo pulls the VCS stamps Go embeds at build time.
-func vcsBuildInfo() (revision, buildTime string, modified, ok bool) {
+func vcsBuildInfo() (revision, commitTime string, modified, ok bool) {
 	info, available := debug.ReadBuildInfo()
 	if !available {
 		return "", "", false, false
@@ -71,11 +71,14 @@ func vcsBuildInfo() (revision, buildTime string, modified, ok bool) {
 		case "vcs.revision":
 			revision = setting.Value
 		case "vcs.time":
-			buildTime = setting.Value
+			// This is the commit's timestamp, not the time of the build. Go
+			// records no build time at all, so calling it one would overstate
+			// what the binary actually knows about itself.
+			commitTime = setting.Value
 		case "vcs.modified":
 			modified = setting.Value == "true"
 		}
 	}
 
-	return revision, buildTime, modified, revision != "" || buildTime != ""
+	return revision, commitTime, modified, revision != "" || commitTime != ""
 }

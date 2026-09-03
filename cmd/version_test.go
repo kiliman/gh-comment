@@ -13,36 +13,36 @@ func TestFormatVersion(t *testing.T) {
 	const sha = "5734d63a1b2c3d4e5f60718293a4b5c6d7e8f900"
 
 	tests := []struct {
-		name      string
-		revision  string
-		buildTime string
-		modified  bool
-		want      string
+		name       string
+		revision   string
+		commitTime string
+		modified   bool
+		want       string
 	}{
 		{
-			name:      "clean build reports short sha and time",
-			revision:  sha,
-			buildTime: "2026-09-03T18:40:29Z",
-			want:      "0.2.0 (5734d63, built 2026-09-03T18:40:29Z)",
+			name:       "clean build reports short sha and commit time",
+			revision:   sha,
+			commitTime: "2026-09-03T18:40:29Z",
+			want:       "0.2.0 (5734d63, committed 2026-09-03T18:40:29Z)",
 		},
 		{
-			name:      "a modified tree is marked dirty",
-			revision:  sha,
-			buildTime: "2026-09-03T18:40:29Z",
-			modified:  true,
+			name:       "a modified tree is marked dirty",
+			revision:   sha,
+			commitTime: "2026-09-03T18:40:29Z",
+			modified:   true,
 			// Uncommitted changes mean the binary matches no commit at all,
 			// so the SHA alone would be a lie.
-			want: "0.2.0 (5734d63-dirty, built 2026-09-03T18:40:29Z)",
+			want: "0.2.0 (5734d63-dirty, committed 2026-09-03T18:40:29Z)",
 		},
 		{
-			name:     "revision without a build time",
+			name:     "revision without a commit time",
 			revision: sha,
 			want:     "0.2.0 (5734d63)",
 		},
 		{
-			name:      "build time without a revision",
-			buildTime: "2026-09-03T18:40:29Z",
-			want:      "0.2.0 (built 2026-09-03T18:40:29Z)",
+			name:       "commit time without a revision",
+			commitTime: "2026-09-03T18:40:29Z",
+			want:       "0.2.0 (committed 2026-09-03T18:40:29Z)",
 		},
 		{
 			name: "no stamps degrades to the bare version",
@@ -57,7 +57,7 @@ func TestFormatVersion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, formatVersion("0.2.0", tt.revision, tt.buildTime, tt.modified))
+			assert.Equal(t, tt.want, formatVersion("0.2.0", tt.revision, tt.commitTime, tt.modified))
 		})
 	}
 }
@@ -75,7 +75,7 @@ func TestReleaseVersionIsBareSemver(t *testing.T) {
 }
 
 func TestVcsBuildInfoShape(t *testing.T) {
-	revision, buildTime, _, ok := vcsBuildInfo()
+	revision, commitTime, _, ok := vcsBuildInfo()
 	if !ok {
 		t.Skip("no build info available")
 	}
@@ -83,8 +83,8 @@ func TestVcsBuildInfoShape(t *testing.T) {
 	if revision != "" {
 		assert.Regexp(t, `^[0-9a-f]{40}$`, revision, "vcs.revision should be a full git SHA")
 	}
-	if buildTime != "" {
-		assert.Regexp(t, `^\d{4}-\d{2}-\d{2}T`, buildTime, "vcs.time should be RFC3339")
+	if commitTime != "" {
+		assert.Regexp(t, `^\d{4}-\d{2}-\d{2}T`, commitTime, "vcs.time should be RFC3339")
 	}
 }
 
@@ -95,4 +95,15 @@ func TestRootCommandExposesTheVersion(t *testing.T) {
 	assert.Equal(t, versionString(), rootCmd.Version)
 	assert.NotEqual(t, "1.0.0", rootCmd.Version,
 		"the old hardcoded version must not come back")
+}
+
+func TestVersionDoesNotClaimABuildTime(t *testing.T) {
+	// Go records the commit's timestamp (vcs.time), not the time of the build.
+	// Labelling it "built" was wrong in a way that mattered: two binaries
+	// compiled hours apart from the same commit reported identical times, so
+	// the field looked like it distinguished builds when it never could.
+	got := formatVersion("0.2.0", "5734d63a1b2c3d", "2026-09-03T18:49:33Z", false)
+
+	assert.Contains(t, got, "committed 2026-09-03T18:49:33Z")
+	assert.NotContains(t, got, "built", "the binary knows its commit, not when it was compiled")
 }
