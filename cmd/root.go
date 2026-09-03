@@ -158,7 +158,7 @@ var rootCmd = &cobra.Command{
 		$ gh comment add 123 src/api.js 40 "[SUGGEST:+2: // Add error handling]"
 		$ gh comment add 123 src/api.js 45 "[SUGGEST:-1: import { logger } from './utils';]"
 	`),
-	Version: "1.0.0",
+	Version: versionString(),
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
