@@ -36,32 +36,7 @@ jobs:
         with:
           generate_attestations: true
           go_version_file: go.mod
-          build_script_override: |
-            #!/bin/bash
-            set -e
-            tag="$1"
-            mkdir -p dist
-
-            # Stamp the binary with the tag it is being cut from, so a release
-            # can never report a version that disagrees with its own tag.
-            LDFLAGS="-X github.com/silouanwright/gh-comment/cmd.releaseVersion=${tag#v}"
-
-            # Build for different platforms with proper naming
-            GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-windows-amd64.exe"
-            GOOS=windows GOARCH=386 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-windows-386.exe"
-            GOOS=windows GOARCH=arm64 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-windows-arm64.exe"
-
-            GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-darwin-amd64"
-            GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-darwin-arm64"
-
-            GOOS=linux GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-linux-amd64"
-            GOOS=linux GOARCH=386 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-linux-386"
-            GOOS=linux GOARCH=arm go build -ldflags "$LDFLAGS" -o "dist/gh-comment-linux-arm"
-            GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-linux-arm64"
-
-            GOOS=freebsd GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-freebsd-amd64"
-            GOOS=freebsd GOARCH=386 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-freebsd-386"
-            GOOS=freebsd GOARCH=arm64 go build -ldflags "$LDFLAGS" -o "dist/gh-comment-freebsd-arm64"
+          build_script_override: scripts/build-release.sh
 
       - name: Create Release Notes
         id: release_notes
