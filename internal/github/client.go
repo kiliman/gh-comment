@@ -32,6 +32,9 @@ type GitHubAPI interface {
 	FindPendingReview(owner, repo string, pr int) (int, error)
 	SubmitReview(owner, repo string, pr, reviewID int, body, event string) error
 
+	// Comment lookup operations
+	GetPRNumberForComment(owner, repo string, commentID int) (int, error)
+
 	// GraphQL operations
 	ResolveReviewThread(threadID string) error
 	FindReviewThreadForComment(owner, repo string, prNumber, commentID int) (string, error)
@@ -51,6 +54,7 @@ type Comment struct {
 	Position       int    `json:"position,omitempty"`
 	CommitID       string `json:"commit_id,omitempty"`
 	PullRequestURL string `json:"pull_request_url,omitempty"`
+	IssueURL       string `json:"issue_url,omitempty"`
 	InReplyToID    int    `json:"in_reply_to_id,omitempty"`
 
 	// Computed fields
@@ -100,18 +104,20 @@ type MockClient struct {
 	ResolvedThread    string
 	PendingReviewID   int
 	SubmittedReviewID int
+	CommentPRNumber   int
 
 	// Call tracking for regression tests
 	CreateReviewCalls []ReviewInput
 
 	// Error simulation
-	ListIssueCommentsError  error
-	ListReviewCommentsError error
-	CreateCommentError      error
-	ResolveThreadError      error
-	FindReviewThreadError   error
-	FindPendingReviewError  error
-	SubmitReviewError       error
+	ListIssueCommentsError     error
+	ListReviewCommentsError    error
+	CreateCommentError         error
+	ResolveThreadError         error
+	FindReviewThreadError      error
+	GetPRNumberForCommentError error
+	FindPendingReviewError     error
+	SubmitReviewError          error
 }
 
 // NewMockClient creates a new mock client for testing
@@ -138,6 +144,7 @@ func NewMockClient() *MockClient {
 			},
 		},
 		PendingReviewID:   987654, // Mock pending review ID
+		CommentPRNumber:   123,    // PR a comment ID resolves to
 		CreateReviewCalls: make([]ReviewInput, 0),
 	}
 }
@@ -192,6 +199,13 @@ func (m *MockClient) CreateReviewCommentReply(owner, repo string, commentID int,
 	}
 	m.CreatedComment = comment
 	return comment, nil
+}
+
+func (m *MockClient) GetPRNumberForComment(owner, repo string, commentID int) (int, error) {
+	if m.GetPRNumberForCommentError != nil {
+		return 0, m.GetPRNumberForCommentError
+	}
+	return m.CommentPRNumber, nil
 }
 
 func (m *MockClient) FindReviewThreadForComment(owner, repo string, prNumber, commentID int) (string, error) {

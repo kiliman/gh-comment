@@ -153,9 +153,9 @@ func runReview(cmd *cobra.Command, args []string) error {
 		if prNumber > 0 {
 			pr = prNumber
 		} else {
-			detectedPR, err := getCurrentPR()
+			detectedPR, err := getCurrentPRForRepo(repository)
 			if err != nil {
-				return fmt.Errorf("failed to detect PR number: %w (try specifying --pr)", err)
+				return fmt.Errorf("failed to detect PR number: %w", err)
 			}
 			pr = detectedPR
 		}

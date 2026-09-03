@@ -25,17 +25,20 @@ func TestPreventRealAPICallsRegression(t *testing.T) {
 		description string
 	}{
 		{
-			name: "getCurrentPR should not call real gh CLI when prNumber is set",
+			name: "getPRContext should not call real gh CLI when both globals are set",
 			testFunc: func() error {
-				// This should NOT call the real gh CLI because prNumber is already set
-				pr, err := getCurrentPR()
+				// This should NOT call the real gh CLI: repo and prNumber both
+				// short-circuit before any subprocess would run.
+				gotRepo, pr, err := getPRContext()
+				assert.Equal(t, "test/repo", gotRepo)
 				assert.Equal(t, 123, pr)
 				return err
 			},
 			setupGlobal: func() {
+				repo = "test/repo"
 				prNumber = 123 // Pre-set to avoid real API call
 			},
-			description: "Prevents real gh CLI calls in getCurrentPR when prNumber is already set",
+			description: "Prevents real gh CLI calls in getPRContext when globals are pre-set",
 		},
 		{
 			name: "getCurrentRepo should not call real gh CLI when repo is set",
@@ -97,7 +100,7 @@ func TestUnitTestsAvoidRealAPICalls(t *testing.T) {
 		// Note: We DON'T actually call these functions here because they would
 		// trigger real gh CLI calls. This test serves as documentation.
 
-		t.Log("IMPORTANT: getCurrentPR() and getCurrentRepo() call real gh CLI when globals are unset")
+		t.Log("IMPORTANT: getCurrentPRForRepo() and getCurrentRepo() call real gh CLI when globals are unset")
 		t.Log("UNIT TEST PATTERN: Always pre-set prNumber and repo variables in test setup")
 		t.Log("Example: prNumber = 123; repo = \"owner/repo\" before calling functions")
 	})
@@ -108,11 +111,12 @@ func TestUnitTestsAvoidRealAPICalls(t *testing.T) {
 		repo = "test/repo"
 
 		// Now these functions will NOT call real gh CLI
-		pr, err := getCurrentPR()
+		repoResult, pr, err := getPRContext()
 		assert.NoError(t, err)
 		assert.Equal(t, 123, pr)
+		assert.Equal(t, "test/repo", repoResult)
 
-		repoResult, err := getCurrentRepo()
+		repoResult, err = getCurrentRepo()
 		assert.NoError(t, err)
 		assert.Equal(t, "test/repo", repoResult)
 

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/MakeNowJust/heredoc"
 
@@ -62,18 +61,17 @@ func runResolve(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Get repository and PR context
-	repository, pr, err := getPRContext()
+	// Get repository and PR context. The comment ID identifies its own PR, so
+	// this works off-branch.
+	repository, pr, err := getPRContextForComment(resolveClient, commentID)
 	if err != nil {
 		return err
 	}
 
-	// Parse owner/repo
-	parts := strings.Split(repository, "/")
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid repository format: %s (expected owner/repo)", repository)
+	owner, repoName, err := splitRepo(repository)
+	if err != nil {
+		return err
 	}
-	owner, repoName := parts[0], parts[1]
 
 	if verbose {
 		fmt.Printf("Repository: %s\n", repository)

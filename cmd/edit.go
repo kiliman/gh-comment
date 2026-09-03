@@ -86,8 +86,9 @@ func runEdit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Get repository context
-	repository, prNumber, err := getPRContext()
+	// Get repository context. The comment ID identifies its own PR, so this
+	// works off-branch.
+	repository, prNumber, err := getPRContextForComment(editClient, commentID)
 	if err != nil {
 		return err
 	}
@@ -97,12 +98,10 @@ func runEdit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Parse owner/repo
-	parts := strings.Split(repository, "/")
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid repository format: %s (expected owner/repo)", repository)
+	owner, repoName, err := splitRepo(repository)
+	if err != nil {
+		return err
 	}
-	owner, repoName := parts[0], parts[1]
 
 	if verbose {
 		fmt.Printf("Repository: %s\n", repository)

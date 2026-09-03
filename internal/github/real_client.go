@@ -149,20 +149,9 @@ func (c *RealClient) CreateReviewCommentReply(owner, repo string, commentID int,
 		return nil, enhancedErr
 	}
 
-	// Extract PR number from pull_request_url
-	if originalComment.PullRequestURL == "" {
-		return nil, fmt.Errorf("comment #%d has no associated pull request", commentID)
-	}
-
-	// Parse PR number from URL like "https://api.github.com/repos/owner/repo/pulls/422"
-	parts := strings.Split(originalComment.PullRequestURL, "/")
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("invalid pull_request_url format")
-	}
-	prNumberStr := parts[len(parts)-1]
-	prNumber, err := strconv.Atoi(prNumberStr)
+	prNumber, err := prNumberFromParentURL(originalComment.PullRequestURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse PR number from URL: %w", err)
+		return nil, fmt.Errorf("comment #%d has no usable pull request reference: %w", commentID, err)
 	}
 
 	// Use the correct GitHub API endpoint for review comment replies
@@ -190,7 +179,69 @@ func (c *RealClient) CreateReviewCommentReply(owner, repo string, commentID int,
 	return &comment, nil
 }
 
-// FindReviewThreadForComment finds the thread ID for a review comment
+// GetPRNumberForComment resolves which pull request a comment belongs to,
+// using only the comment ID.
+//
+// Both comment namespaces hand back their parent on a plain GET: a review
+// comment carries pull_request_url, an issue comment carries issue_url. An
+// issue comment's issue number is the PR number when the issue is a PR, so the
+// trailing path segment answers the question either way — one API call, no
+// branch, no flag.
+func (c *RealClient) GetPRNumberForComment(owner, repo string, commentID int) (int, error) {
+	if err := validateRepoParams(owner, repo); err != nil {
+		return 0, err
+	}
+	if commentID <= 0 {
+		return 0, fmt.Errorf("invalid comment ID %d: must be positive", commentID)
+	}
+
+	// Review comments first: that is the namespace the comment-ID commands
+	// mostly operate on, and the only one that supports threading.
+	var reviewComment Comment
+	if err := c.restClient.Get(fmt.Sprintf("repos/%s/%s/pulls/comments/%d", owner, repo, commentID), &reviewComment); err == nil {
+		if pr, parseErr := prNumberFromParentURL(reviewComment.PullRequestURL); parseErr == nil {
+			return pr, nil
+		}
+	}
+
+	var issueComment Comment
+	if err := c.restClient.Get(fmt.Sprintf("repos/%s/%s/issues/comments/%d", owner, repo, commentID), &issueComment); err == nil {
+		if pr, parseErr := prNumberFromParentURL(issueComment.IssueURL); parseErr == nil {
+			return pr, nil
+		}
+	}
+
+	return 0, fmt.Errorf("comment #%d not found in %s/%s as either a review comment or an issue comment", commentID, owner, repo)
+}
+
+// prNumberFromParentURL pulls the trailing number off a GitHub API parent URL,
+// e.g. "https://api.github.com/repos/owner/repo/pulls/422" or ".../issues/422".
+func prNumberFromParentURL(rawURL string) (int, error) {
+	trimmed := strings.TrimRight(strings.TrimSpace(rawURL), "/")
+	if trimmed == "" {
+		return 0, fmt.Errorf("no parent URL on the comment")
+	}
+
+	slash := strings.LastIndex(trimmed, "/")
+	if slash == -1 || slash == len(trimmed)-1 {
+		return 0, fmt.Errorf("unexpected parent URL format: %q", rawURL)
+	}
+
+	number, err := strconv.Atoi(trimmed[slash+1:])
+	if err != nil || number <= 0 {
+		return 0, fmt.Errorf("could not parse a PR number out of %q", rawURL)
+	}
+
+	return number, nil
+}
+
+// FindReviewThreadForComment finds the thread ID for a review comment.
+//
+// Both axes are paginated. Previously the query asked for the first 100 threads
+// and the first 10 comments per thread and silently dropped everything past
+// those caps, which surfaced as "thread not found for comment N" — a message
+// that reads as "your comment ID is wrong" when the real problem was that the
+// comment sat eleventh in a long thread, or in the 101st thread of a busy PR.
 func (c *RealClient) FindReviewThreadForComment(owner, repo string, prNumber, commentID int) (string, error) {
 	if err := validateRepoParams(owner, repo); err != nil {
 		return "", err

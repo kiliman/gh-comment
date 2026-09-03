@@ -108,8 +108,10 @@ func runReviewReply(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Get repository context
-	repository, prNumber, err := getPRContext()
+	// Get repository context. The comment ID identifies its own PR, so this
+	// works from any branch — including main, which is where you always are
+	// when reviewing someone else's PR.
+	repository, prNumber, err := getPRContextForComment(reviewReplyClient, commentID)
 	if err != nil {
 		return err
 	}
@@ -119,12 +121,10 @@ func runReviewReply(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Parse owner/repo
-	parts := strings.Split(repository, "/")
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid repository format: %s (expected owner/repo)", repository)
+	owner, repoName, err := splitRepo(repository)
+	if err != nil {
+		return err
 	}
-	owner, repoName := parts[0], parts[1]
 
 	if verbose {
 		fmt.Printf("Repository: %s\n", repository)
