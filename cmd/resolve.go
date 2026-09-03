@@ -36,7 +36,7 @@ var resolveCmd = &cobra.Command{
 		$ gh comment resolve --dry-run 2246362251
 
 		# Resolve multiple conversations (pipe from list)
-		$ gh comment list 123 --status open --ids-only | xargs -I {} gh comment resolve {}
+		$ gh comment list 123 --type review --ids-only | xargs -I {} gh comment resolve {}
 	`),
 	Args: cobra.ExactArgs(1),
 	RunE: runResolve,

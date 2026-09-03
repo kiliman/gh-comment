@@ -75,8 +75,8 @@ var rootCmd = &cobra.Command{
 		      --author string     Filter by author (supports wildcards: 'user*')
 		      --since string      Show comments after date ('2024-01-01', '1 week ago')
 		      --until string      Show comments before date
-		      --status string     Filter by status: open, resolved, all
 		      --type string       Filter by type: issue, review
+		      --recent            Show only comments from the last 7 days
 		  -q, --quiet            Minimal output for scripts
 
 		Review Flags:
@@ -100,9 +100,9 @@ var rootCmd = &cobra.Command{
 		  --event REQUEST_CHANGES
 
 		# Advanced Filtering (Power User Features)
-		$ gh comment list 123 --author "senior-dev*" --status open --since "1 week ago"
+		$ gh comment list 123 --author "senior-dev*" --since "1 week ago"
 		$ gh comment list 123 --type review --author "*@company.com" --since "2024-01-01"
-		$ gh comment list 123 --status resolved --until "2024-01-01" --quiet
+		$ gh comment list 123 --type review --until "2024-01-01" --quiet
 
 		# Review Workflows (Professional Code Review)
 		$ gh comment review 123 "Migration review complete" \
@@ -137,7 +137,7 @@ var rootCmd = &cobra.Command{
 		$ gh comment add 123 src/api.js 42 "[SUGGEST:+2: const timeout = 5000;]"
 		$ gh comment add 123 src/utils.js 15 "[SUGGEST:-1: import { validateInput } from './validators';]"
 		$ for file in $(git diff --name-only); do gh comment add 123 "$file" 1 "Auto-generated security scan results"; done
-		$ gh comment list --since "1 week ago" --type review --status open | review-blocker-analysis.sh
+		$ gh comment list --since "1 week ago" --type review | review-blocker-analysis.sh
 
 		# Advanced Comment Management
 		$ gh comment edit 2246362251 "Updated: This rate limiting logic handles concurrent requests properly"
