@@ -283,6 +283,8 @@ func TestPrintCommentAnchors(t *testing.T) {
 		})
 
 		assert.Equal(t, 2, client.fetches, "three comments across two files means two fetches")
+		assert.Equal(t, 1, client.details,
+			"the head SHA is the same for every file, so it is resolved once per review")
 	})
 
 	t.Run("stays quiet when the fetch fails", func(t *testing.T) {
@@ -314,6 +316,12 @@ func TestPrintCommentAnchors(t *testing.T) {
 type countingFileClient struct {
 	*github.MockClient
 	fetches int
+	details int
+}
+
+func (c *countingFileClient) GetPRDetails(owner, repo string, pr int) (map[string]interface{}, error) {
+	c.details++
+	return c.MockClient.GetPRDetails(owner, repo, pr)
 }
 
 func (c *countingFileClient) FetchFileContent(owner, repo, path, ref string) (string, error) {

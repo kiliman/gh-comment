@@ -196,15 +196,20 @@ func printCommentAnchors(client github.GitHubAPI, owner, repoName string, pr int
 		return
 	}
 
-	// fetchPRFileLines is per-file, so fetch once per distinct path rather than
-	// once per comment. A nil entry means the fetch failed and we stay quiet
-	// about that file.
+	// One head-SHA lookup for the whole review, then one content fetch per
+	// distinct path — not per comment.  A nil entry means the fetch failed and
+	// we stay quiet about that file.
+	sha, err := fetchPRHeadSHA(client, owner, repoName, pr)
+	if err != nil {
+		return
+	}
+
 	fileLines := make(map[string][]string)
 	for _, comment := range comments {
 		if _, fetched := fileLines[comment.Path]; fetched {
 			continue
 		}
-		lines, err := fetchPRFileLines(client, owner, repoName, pr, comment.Path)
+		lines, err := fetchFileLinesAtSHA(client, owner, repoName, comment.Path, sha)
 		if err != nil {
 			fileLines[comment.Path] = nil
 			continue
@@ -233,21 +238,37 @@ func printCommentAnchors(client github.GitHubAPI, owner, repoName string, pr int
 }
 
 func fetchPRFileLines(client github.GitHubAPI, owner, repoName string, pr int, filePath string) ([]string, error) {
-	prDetails, err := client.GetPRDetails(owner, repoName, pr)
+	sha, err := fetchPRHeadSHA(client, owner, repoName, pr)
 	if err != nil {
 		return nil, err
 	}
 
+	return fetchFileLinesAtSHA(client, owner, repoName, filePath, sha)
+}
+
+// fetchPRHeadSHA resolves the commit that file contents should be read at.
+// Split out from fetchPRFileLines so a caller reading several files resolves it
+// once rather than once per file.
+func fetchPRHeadSHA(client github.GitHubAPI, owner, repoName string, pr int) (string, error) {
+	prDetails, err := client.GetPRDetails(owner, repoName, pr)
+	if err != nil {
+		return "", err
+	}
+
 	head, ok := prDetails["head"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("PR #%d is missing head commit details", pr)
+		return "", fmt.Errorf("PR #%d is missing head commit details", pr)
 	}
 
 	sha, ok := head["sha"].(string)
 	if !ok || strings.TrimSpace(sha) == "" {
-		return nil, fmt.Errorf("PR #%d is missing head SHA", pr)
+		return "", fmt.Errorf("PR #%d is missing head SHA", pr)
 	}
 
+	return sha, nil
+}
+
+func fetchFileLinesAtSHA(client github.GitHubAPI, owner, repoName, filePath, sha string) ([]string, error) {
 	content, err := client.FetchFileContent(owner, repoName, filePath, sha)
 	if err != nil {
 		return nil, err
