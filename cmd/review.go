@@ -231,9 +231,13 @@ func runReview(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("✅ Successfully created review and %s PR #%d", eventText, pr)
 	if len(reviewCommentInputs) > 0 {
-		fmt.Printf(" with %d comments", len(reviewCommentInputs))
+		fmt.Printf(" with %d %s", len(reviewCommentInputs), pluralize("comment", len(reviewCommentInputs)))
 	}
 	fmt.Println()
+
+	// Show what each comment landed on, so a misplaced line is visible here
+	// rather than on the next trip to the browser.
+	printCommentAnchors(reviewClient, owner, repoName, pr, reviewCommentInputs)
 
 	return nil
 }

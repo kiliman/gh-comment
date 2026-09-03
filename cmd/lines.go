@@ -177,6 +177,61 @@ func runLines(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// printCommentAnchors echoes the source line each inline comment actually
+// attached to.
+//
+// A wrong-but-valid line number produces output identical to a correct run, so
+// the mistake stays invisible until someone opens the PR in a browser.
+// --validate only proves the line exists in the diff, which a
+// wrong-by-one line usually does, and `gh comment lines` only protects people
+// who remembered to run it — precisely the step that gets skipped. A
+// pre-flight check has to be remembered; post-flight output is seen
+// unconditionally.
+//
+// The review has already been created by the time this runs, so every failure
+// path here degrades to printing less rather than returning an error: a display
+// nicety must not turn a successful review into a non-zero exit.
+func printCommentAnchors(client github.GitHubAPI, owner, repoName string, pr int, comments []github.ReviewCommentInput) {
+	if len(comments) == 0 {
+		return
+	}
+
+	// fetchPRFileLines is per-file, so fetch once per distinct path rather than
+	// once per comment. A nil entry means the fetch failed and we stay quiet
+	// about that file.
+	fileLines := make(map[string][]string)
+	for _, comment := range comments {
+		if _, fetched := fileLines[comment.Path]; fetched {
+			continue
+		}
+		lines, err := fetchPRFileLines(client, owner, repoName, pr, comment.Path)
+		if err != nil {
+			fileLines[comment.Path] = nil
+			continue
+		}
+		fileLines[comment.Path] = lines
+	}
+
+	for _, comment := range comments {
+		lines := fileLines[comment.Path]
+		if lines == nil {
+			continue
+		}
+
+		// For a range comment the start line is where an anchor error shows up,
+		// so show that one and mark the rest elided.
+		anchor, elided := comment.Line, ""
+		if comment.StartLine > 0 {
+			anchor = comment.StartLine
+			if comment.Line > comment.StartLine {
+				elided = " …"
+			}
+		}
+
+		fmt.Printf("   %s:%d → %q%s\n", comment.Path, anchor, lineContentAt(lines, anchor), elided)
+	}
+}
+
 func fetchPRFileLines(client github.GitHubAPI, owner, repoName string, pr int, filePath string) ([]string, error) {
 	prDetails, err := client.GetPRDetails(owner, repoName, pr)
 	if err != nil {
