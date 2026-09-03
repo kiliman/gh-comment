@@ -108,7 +108,9 @@ func getPRContextForComment(client github.GitHubAPI, commentID int) (repo string
 	pr, lookupErr := client.GetPRNumberForComment(owner, repoName, commentID)
 	if lookupErr == nil {
 		if verbose {
-			fmt.Printf("Resolved PR #%d from comment #%d\n", pr, commentID)
+			// No "PR" here: the parent may be a plain issue, and claiming
+			// otherwise would misreport what was actually resolved.
+			fmt.Printf("Resolved #%d from comment #%d\n", pr, commentID)
 		}
 		return repo, pr, nil
 	}

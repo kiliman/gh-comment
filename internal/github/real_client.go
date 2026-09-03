@@ -187,6 +187,14 @@ func (c *RealClient) CreateReviewCommentReply(owner, repo string, commentID int,
 // issue comment's issue number is the PR number when the issue is a PR, so the
 // trailing path segment answers the question either way — one API call, no
 // branch, no flag.
+//
+// The honest contract is "the comment's parent issue-or-PR number", which is
+// wider than the name suggests: a comment on a plain issue resolves to that
+// issue's number. That is deliberate and safe. GitHub numbers issues and pull
+// requests in one shared sequence per repository, so the number returned is
+// always the comment's own parent and never some other PR. Rejecting it and
+// falling back to branch detection would substitute a number with no relation
+// to the comment at all, which is the failure this lookup exists to prevent.
 func (c *RealClient) GetPRNumberForComment(owner, repo string, commentID int) (int, error) {
 	if err := validateRepoParams(owner, repo); err != nil {
 		return 0, err
