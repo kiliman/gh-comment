@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -238,4 +239,92 @@ func TestGroupConsecutiveLines(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestPrintCommentAnchors(t *testing.T) {
+	// The mock file content is "// line N" for every line, except line 42
+	// which is `println("hello")` and line 43 which is `}`.
+	t.Run("echoes the line each comment attached to", func(t *testing.T) {
+		client := github.NewMockClient()
+
+		output := captureOutput(func() {
+			printCommentAnchors(client, "owner", "repo", 123, []github.ReviewCommentInput{
+				{Path: "main.go", Line: 42, Body: "x"},
+			})
+		})
+
+		assert.Contains(t, output, `main.go:42`)
+		assert.Contains(t, output, `println(\"hello\")`,
+			"the anchor line is quoted, so a wrong line is visible without opening the PR")
+	})
+
+	t.Run("marks a range comment as elided from its start line", func(t *testing.T) {
+		client := github.NewMockClient()
+
+		output := captureOutput(func() {
+			printCommentAnchors(client, "owner", "repo", 123, []github.ReviewCommentInput{
+				{Path: "main.go", StartLine: 42, Line: 43, Body: "x"},
+			})
+		})
+
+		assert.Contains(t, output, "main.go:42", "a range anchors on its start line")
+		assert.Contains(t, output, "…")
+	})
+
+	t.Run("fetches each distinct file once, not once per comment", func(t *testing.T) {
+		client := &countingFileClient{MockClient: github.NewMockClient()}
+
+		captureOutput(func() {
+			printCommentAnchors(client, "owner", "repo", 123, []github.ReviewCommentInput{
+				{Path: "main.go", Line: 42},
+				{Path: "main.go", Line: 43},
+				{Path: "other.go", Line: 42},
+			})
+		})
+
+		assert.Equal(t, 2, client.fetches, "three comments across two files means two fetches")
+	})
+
+	t.Run("stays quiet when the fetch fails", func(t *testing.T) {
+		// The review is already created by now. A display nicety must never
+		// turn a successful review into a non-zero exit.
+		client := &failingFileClient{MockClient: github.NewMockClient()}
+
+		output := captureOutput(func() {
+			printCommentAnchors(client, "owner", "repo", 123, []github.ReviewCommentInput{
+				{Path: "main.go", Line: 42},
+			})
+		})
+
+		assert.Empty(t, output)
+	})
+
+	t.Run("no comments means no output and no calls", func(t *testing.T) {
+		client := &countingFileClient{MockClient: github.NewMockClient()}
+
+		output := captureOutput(func() {
+			printCommentAnchors(client, "owner", "repo", 123, nil)
+		})
+
+		assert.Empty(t, output)
+		assert.Zero(t, client.fetches)
+	})
+}
+
+type countingFileClient struct {
+	*github.MockClient
+	fetches int
+}
+
+func (c *countingFileClient) FetchFileContent(owner, repo, path, ref string) (string, error) {
+	c.fetches++
+	return c.MockClient.FetchFileContent(owner, repo, path, ref)
+}
+
+type failingFileClient struct {
+	*github.MockClient
+}
+
+func (c *failingFileClient) FetchFileContent(owner, repo, path, ref string) (string, error) {
+	return "", fmt.Errorf("file not found in this ref")
 }

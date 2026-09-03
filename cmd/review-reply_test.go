@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/silouanwright/gh-comment/internal/github"
 )
@@ -208,4 +210,63 @@ func TestReviewReplyValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReviewReplyResolveDoesNotWriteBeforeThreadIsKnown(t *testing.T) {
+	// The whole point of looking the thread up first: when the lookup fails,
+	// nothing has been written, so the error is safe to act on by retrying.
+	// Previously the reply went out first and the failure left it committed
+	// with no hint that it had.
+	originalClient := reviewReplyClient
+	originalResolve := resolveConversationReviewReply
+	defer func() {
+		reviewReplyClient = originalClient
+		resolveConversationReviewReply = originalResolve
+	}()
+	withGlobals(t, "owner/repo", 123)
+
+	mockClient := github.NewMockClient()
+	mockClient.FindReviewThreadError = fmt.Errorf("thread not found for comment 3917588327")
+	reviewReplyClient = mockClient
+	resolveConversationReviewReply = true
+
+	err := runReviewReply(nil, []string{"3917588327", "Verified fixed."})
+
+	require.Error(t, err)
+	assert.Nil(t, mockClient.CreatedComment,
+		"no reply may be posted when the thread lookup fails — otherwise retrying double-posts")
+	assert.Contains(t, err.Error(), "PR #123",
+		"the error should name the PR number, which is the input that is usually wrong")
+	assert.Contains(t, err.Error(), "safe to retry")
+}
+
+func TestReviewReplyReportsPartialWriteWhenResolveFails(t *testing.T) {
+	// The reply is already committed by the time resolve runs. If resolve then
+	// fails for any reason, say so and hand over the finishing command rather
+	// than letting the user re-run this one.
+	originalClient := reviewReplyClient
+	originalResolve := resolveConversationReviewReply
+	defer func() {
+		reviewReplyClient = originalClient
+		resolveConversationReviewReply = originalResolve
+	}()
+	withGlobals(t, "owner/repo", 123)
+
+	mockClient := github.NewMockClient()
+	mockClient.ResolveThreadError = fmt.Errorf("network unreachable")
+	reviewReplyClient = mockClient
+	resolveConversationReviewReply = true
+
+	output := captureOutput(func() {
+		err := runReviewReply(nil, []string{"3917588327", "Verified fixed."})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to resolve conversation")
+	})
+
+	assert.NotNil(t, mockClient.CreatedComment, "the reply did land")
+	assert.Contains(t, output, "NOT resolved")
+	assert.Contains(t, output, "gh comment resolve 3917588327 --pr 123",
+		"should hand over the one-liner that finishes the job")
+	assert.Contains(t, output, "would post the reply again",
+		"should warn against the retry that would double-post")
 }
