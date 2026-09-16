@@ -99,7 +99,7 @@ func TestRootCommandExposesTheVersion(t *testing.T) {
 
 func TestVersionDoesNotClaimABuildTime(t *testing.T) {
 	// Go records the commit's timestamp (vcs.time), not the time of the build.
-	// Labelling it "built" was wrong in a way that mattered: two binaries
+	// Labeling it "built" was wrong in a way that mattered: two binaries
 	// compiled hours apart from the same commit reported identical times, so
 	// the field looked like it distinguished builds when it never could.
 	got := formatVersion("0.2.0", "5734d63a1b2c3d", "2026-09-03T18:49:33Z", false)
